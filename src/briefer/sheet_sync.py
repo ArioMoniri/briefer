@@ -45,6 +45,16 @@ class SheetSync:
             except Exception:  # noqa: BLE001
                 log.exception("sync failed for %s sheet", sheet)
 
+    def _status_for(self, entry: dict, done: bool) -> str:
+        from .pipeline import _parse_deadline, _parse_event_date
+        from .tags import status_tag
+        a = entry.get("analysis") or {}
+        deadline = _parse_deadline(a.get("application_deadline"))
+        event_dt, _ = _parse_event_date(a.get("event_date"))
+        checked = done or entry.get("checked_at") is not None
+        return status_tag(entry.get("sheet", "article"), checked,
+                          deadline, event_dt)
+
     def _maybe_sheet_reminder(self, entry: dict, remind_raw: str) -> None:
         from .reminders import parse_when
         when = parse_when(remind_raw, self.timezone)
@@ -68,13 +78,14 @@ class SheetSync:
         headers = EVENT_HEADERS if sheet == "event" else ARTICLE_HEADERS
         cols = _control_cols(headers)
         id_i, done_i, rem_i = cols["id"] - 1, cols["done"] - 1, cols["remind_at"] - 1
+        stat_i = cols["status"] - 1
         try:
             values = ws.get_all_values()
         except Exception as exc:  # noqa: BLE001
             log.warning("could not read %s sheet: %s", sheet, exc)
             return
 
-        present: dict[str, tuple[int, bool, str]] = {}
+        present: dict[str, tuple[int, bool, str, str]] = {}
         for rnum, row in enumerate(values[1:], start=2):
             if len(row) <= id_i:
                 continue
@@ -83,7 +94,8 @@ class SheetSync:
                 continue
             done = len(row) > done_i and row[done_i].strip().upper() in _TRUE
             remind_raw = row[rem_i].strip() if len(row) > rem_i else ""
-            present[eid] = (rnum, done, remind_raw)
+            cur_status = row[stat_i].strip() if len(row) > stat_i else ""
+            present[eid] = (rnum, done, remind_raw, cur_status)
 
         for entry in self.store.active_entries(sheet):
             eid = entry["id"]
@@ -95,7 +107,11 @@ class SheetSync:
                 log.info("Entry %s deleted from %s sheet — reminders cancelled",
                          eid, sheet)
                 continue
-            rnum, done, remind_raw = present[eid]
+            rnum, done, remind_raw, cur_status = present[eid]
+            # Live colored status tag (time urgency), consistent across sheets.
+            new_status = self._status_for(entry, done)
+            if new_status and new_status != cur_status:
+                self.sheets.write_status(sheet, rnum, new_status)
             # Sheet-driven "Remind At": user typed a date → schedule a reminder.
             if remind_raw:
                 self._maybe_sheet_reminder(entry, remind_raw)

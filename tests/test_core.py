@@ -252,6 +252,7 @@ def test_entries_and_checkbox_sync():
             def worksheet(self, sheet): return self._ws
             def write_check_cells(self, sheet, r, iso, h): self.check.append((r, h))
             def write_stats(self, sheet, st): pass
+            def write_status(self, sheet, r, tag): pass
 
         # Checked → checked_at set + reminders cancelled.
         fake = FakeSheets([EVENT_HEADERS, row])
@@ -356,6 +357,18 @@ def test_error_message_classifier():
     assert infra and "credit" in msg.lower()
     msg2, infra2 = _error_message(ValueError("boom"))
     assert not infra2 and "boom" in msg2
+
+
+def test_status_tags_consistent():
+    from datetime import datetime, timezone
+    from briefer.tags import status_tag
+    now = datetime(2026, 7, 11, tzinfo=timezone.utc)
+    assert status_tag("event", True, None, None, now) == "✅ Done"
+    assert "🔴" in status_tag("event", False, datetime(2026, 7, 1, tzinfo=timezone.utc), None, now)
+    assert "🟠" in status_tag("event", False, datetime(2026, 7, 13, tzinfo=timezone.utc), None, now)
+    assert "🟢" in status_tag("article", False, None, None, now)
+    # naive datetime doesn't crash
+    assert status_tag("event", False, datetime(2026, 11, 4), None, now)
 
 
 def test_semantic_dedup_key():

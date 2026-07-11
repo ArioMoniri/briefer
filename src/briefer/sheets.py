@@ -138,7 +138,7 @@ def _appended_row_number(resp: Any) -> int | None:
 # At/Time; NOTES and MY TAGS are yours to fill and are never overwritten (a
 # cumulative re-submission only rewrites the data columns).
 _TRAILING = ["Image", "ID", "Done", "Checked At", "Time→Check (h)",
-             "Notes", "My Tags", "Remind At"]
+             "Notes", "My Tags", "Remind At", "Status"]
 
 _ARTICLE_DATA = [
     "Captured At", "Title", "Type", "Summary", "Catch Points",
@@ -164,7 +164,7 @@ def _control_cols(headers: list[str]) -> dict[str, int]:
         "image": col("Image"), "id": col("ID"), "done": col("Done"),
         "checked_at": col("Checked At"), "time": col("Time→Check (h)"),
         "notes": col("Notes"), "tags": col("My Tags"),
-        "remind_at": col("Remind At"),
+        "remind_at": col("Remind At"), "status": col("Status"),
     }
 
 
@@ -285,13 +285,14 @@ class SheetsClient:
         return self._events if sheet == "event" else self._articles
 
     def _append(self, sheet: str, data: list[str], entry_id: str,
-                images: list[tuple[bytes, str]] | None) -> int | None:
+                images: list[tuple[bytes, str]] | None,
+                status: str = "") -> int | None:
         ws = self.worksheet(sheet)
         headers = EVENT_HEADERS if sheet == "event" else ARTICLE_HEADERS
         cols = _control_cols(headers)
-        # Trailing: Image, ID, Done, Checked At, Time, Notes, My Tags, Remind At.
-        # Done left blank here; _make_checkbox sets a real boolean + checkbox.
-        row = data + ["", entry_id, "", "", "", "", "", ""]
+        # Trailing: Image, ID, Done, Checked At, Time, Notes, My Tags, Remind
+        # At, Status. Done left blank; _make_checkbox sets a real boolean.
+        row = data + ["", entry_id, "", "", "", "", "", "", status]
         # RAW: untrusted content is never parsed as a formula.
         resp = ws.append_row(row, value_input_option="RAW")
         rownum = _appended_row_number(resp)
@@ -300,13 +301,24 @@ class SheetsClient:
             self._make_checkbox(ws, rownum, cols["done"])
         return rownum
 
-    def append_article(self, a, source, user, images=None, entry_id="") -> int | None:
+    def append_article(self, a, source, user, images=None, entry_id="",
+                       status="") -> int | None:
         return self._append("article", self._article_data(a, source, user),
-                            entry_id, images)
+                            entry_id, images, status)
 
-    def append_event(self, e, source, user, images=None, entry_id="") -> int | None:
+    def append_event(self, e, source, user, images=None, entry_id="",
+                     status="") -> int | None:
         return self._append("event", self._event_data(e, source, user),
-                            entry_id, images)
+                            entry_id, images, status)
+
+    def write_status(self, sheet: str, rownum: int, tag: str) -> None:
+        ws = self.worksheet(sheet)
+        headers = EVENT_HEADERS if sheet == "event" else ARTICLE_HEADERS
+        col = _col_letter(_control_cols(headers)["status"])
+        try:
+            ws.update([[tag]], f"{col}{rownum}", value_input_option="RAW")
+        except Exception as exc:  # noqa: BLE001
+            log.warning("write_status failed: %s", exc)
 
     def _make_checkbox(self, ws: gspread.Worksheet, row: int, col: int) -> None:
         grid = {"sheetId": ws.id,
@@ -320,11 +332,13 @@ class SheetsClient:
                     "range": grid,
                     "cell": {"userEnteredValue": {"boolValue": False}},
                     "fields": "userEnteredValue"}},
-                # 2) render it as a checkbox.
+                # 2) render it as a checkbox. strict=False so a stray value
+                #    (e.g. an old text 'FALSE') never triggers a blocking
+                #    "Invalid" popup — it just shows the checkbox.
                 {"setDataValidation": {
                     "range": grid,
                     "rule": {"condition": {"type": "BOOLEAN"},
-                             "showCustomUi": True, "strict": True}}},
+                             "showCustomUi": True, "strict": False}}},
             ]})
         except Exception as exc:  # noqa: BLE001
             log.warning("could not set checkbox: %s", exc)

@@ -61,6 +61,8 @@ HELP = (
     "For events I also send a `.ics` file — open it on iPhone/Android and tap "
     "*Add to Calendar*. It carries alarms for the day-of and 2h/1h before, plus "
     "a Google Calendar button.\n\n"
+    "*The sheet's Status tag* (both sheets) is colored & live: 🔴 Passed, "
+    "🟠 Due soon, 🟡 Coming up, 🟢 Upcoming/New, ✅ Done, ⚪ No date.\n\n"
     "*The sheet's ✅ checkbox*\n"
     "Each row has a *Done* checkbox. Tick it and I stop reminding about that "
     "item and record *when* you checked it (and how long it took — there's an "

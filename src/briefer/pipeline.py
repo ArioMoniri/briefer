@@ -117,15 +117,18 @@ class Pipeline:
                           updated=True, changed=changed)
 
         entry_id = uuid.uuid4().hex[:12]
-        if kind == "event":
-            row = self.sheets.append_event(fresh, source, submitted_by, images, entry_id)
-        else:
-            row = self.sheets.append_article(fresh, source, submitted_by, images, entry_id)
-        self.store.add_entry(entry_id, chat_id, kind, fp,
-                             str(fresh.get("title", "")), fresh, dedup_key)
-
         deadline_dt = _parse_deadline(fresh.get("application_deadline"))
         event_dt, all_day = _parse_event_date(fresh.get("event_date"))
+        from .tags import status_tag
+        status = status_tag(kind, False, deadline_dt, event_dt)
+        if kind == "event":
+            row = self.sheets.append_event(fresh, source, submitted_by, images,
+                                           entry_id, status)
+        else:
+            row = self.sheets.append_article(fresh, source, submitted_by, images,
+                                             entry_id, status)
+        self.store.add_entry(entry_id, chat_id, kind, fp,
+                             str(fresh.get("title", "")), fresh, dedup_key)
         return Result(kind=kind, analysis=fresh, source=source,
                       deadline_dt=deadline_dt, event_dt=event_dt,
                       event_all_day=all_day, sheet_row=row, entry_id=entry_id)
