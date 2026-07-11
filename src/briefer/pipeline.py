@@ -61,12 +61,35 @@ class Pipeline:
                 chat_id: int = 0) -> Result:
         content = self.enricher.enrich(text, attachments)
         fp = self._fingerprint(content)
-        existing = self.store.entry_by_fingerprint(fp)
 
-        # Re-submission: keep the item on its original sheet.
-        kind = force_kind or (existing["sheet"] if existing
-                              else analysis.classify(self.llm, content))
-        log.info("Classified as %s%s", kind, " (re-submission)" if existing else "")
+        # Exact re-send: byte-identical content we've already analysed. If the
+        # row still exists there is, by definition, nothing new — so DON'T burn
+        # tokens re-analysing, and above all don't let repeated re-sends pile
+        # near-duplicate bullets into the same cell (each LLM run phrases them
+        # slightly differently, which otherwise grows the row every time).
+        exact = self.store.entry_by_fingerprint(fp)
+        if exact:
+            row = self.sheets.find_row_by_id(exact["sheet"], exact["id"])
+            if row is not None:
+                a = exact["analysis"]
+                log.info("Exact re-send of %s — already up to date, skipping "
+                         "re-analysis", exact["id"])
+                return Result(
+                    kind=exact["sheet"], analysis=a, source=_source_label(content),
+                    deadline_dt=_parse_deadline(a.get("application_deadline")),
+                    event_dt=_parse_event_date(a.get("event_date"))[0],
+                    event_all_day=_parse_event_date(a.get("event_date"))[1],
+                    sheet_row=row, entry_id=exact["id"],
+                    updated=True, changed=False)
+            # Row was deleted from the sheet — retire the old entry and re-create
+            # a fresh one below (with a brand-new, un-bloated analysis).
+            log.info("Entry %s row missing from sheet — re-creating", exact["id"])
+            self.store.mark_entry_removed(exact["id"])
+
+        # Re-submission (semantic, not byte-exact): keep the item on its sheet.
+        existing = None
+        kind = force_kind or analysis.classify(self.llm, content)
+        log.info("Classified as %s", kind)
 
         if kind == "event":
             raw = analysis.analyze_event(self.llm, self.cfg, content)
@@ -245,37 +268,65 @@ _LIST_FIELDS = {
 }
 
 
+# Values that must never overwrite a previously-good scalar (a re-analysis
+# that failed to extract a title/date shouldn't wipe the one we already have).
+_PLACEHOLDERS = {"", "untitled", "unknown", "n/a", "na", "none", "no title",
+                 "no date", "tbd", "-"}
+
+
 def _merge_analysis(prev: dict[str, Any], new: dict[str, Any]
                     ) -> tuple[dict[str, Any], bool]:
     """Cumulatively merge a fresh analysis into a previous one.
 
-    List fields are unioned (nothing is lost); scalar fields take the newest
-    non-empty value. Returns (merged, changed) where `changed` is True if any
-    new information was actually added.
+    List fields are unioned with normalized dedup (so slightly re-worded but
+    equivalent bullets don't accumulate). Scalar fields adopt the new value
+    only when it's meaningful and different — a placeholder like "Untitled"
+    never clobbers a good previous value. Returns (merged, changed).
     """
-    merged = dict(new)
+    merged = dict(prev)            # start from what we already had
     changed = False
     for k in _LIST_FIELDS:
-        old = prev.get(k) or []
-        neu = new.get(k) or []
-        old = [old] if isinstance(old, str) else list(old)
-        neu = [neu] if isinstance(neu, str) else list(neu)
-        seen: set[str] = set()
-        union: list[Any] = []
-        for item in old + neu:
-            key = str(item).strip().lower()
-            if key and key not in seen:
-                seen.add(key)
-                union.append(item)
-        if len(union) > len(old):
-            changed = True
+        union, added = _union_list(prev.get(k), new.get(k))
         merged[k] = union
+        if added:
+            changed = True
     for k, v in new.items():
         if k in _LIST_FIELDS or k.startswith("_"):
             continue
-        if v not in (None, "") and str(prev.get(k, "")) != str(v):
+        if v in (None, "") or str(v).strip().lower() in _PLACEHOLDERS:
+            continue               # don't overwrite good data with a placeholder
+        if str(prev.get(k, "")) != str(v):
+            merged[k] = v
             changed = True
+    for k, v in new.items():       # carry over fresh verification/private flags
+        if k.startswith("_"):
+            merged[k] = v
     return merged, changed
+
+
+def _union_list(old: Any, new: Any) -> tuple[list[Any], bool]:
+    """Union two lists, de-duplicating on normalized text (case/punctuation-
+    insensitive) so re-phrased duplicates collapse. Returns (union, added)."""
+    import re
+    def norm(x: Any) -> str:  # full-length (unlike _norm, which caps at 80)
+        return " ".join(re.sub(r"[^a-z0-9]+", " ", str(x).lower()).split())
+    old = [old] if isinstance(old, str) else list(old or [])
+    new = [new] if isinstance(new, str) else list(new or [])
+    seen: set[str] = set()
+    union: list[Any] = []
+    added = False
+    for item in old:
+        key = norm(item)
+        if key and key not in seen:
+            seen.add(key)
+            union.append(item)
+    for item in new:
+        key = norm(item)
+        if key and key not in seen:
+            seen.add(key)
+            union.append(item)
+            added = True
+    return union, added
 
 
 def _collect_images(content: EnrichedContent, limit: int = 3

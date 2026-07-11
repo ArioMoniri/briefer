@@ -214,6 +214,71 @@ def test_analysis_merge_is_cumulative():
     assert unchanged is False
 
 
+def test_merge_dedups_reworded_bullets_and_keeps_good_scalars():
+    """Re-phrased-but-equivalent bullets collapse (case/punctuation), and a
+    placeholder title never overwrites a real one — the two visible bugs."""
+    from briefer.pipeline import _merge_analysis
+    prev = {"title": "RisQ", "catch_points": ["JEPA applied to 3D brain MRI"]}
+    # Same bullet, different punctuation/case + a genuinely new one; bad title.
+    new = {"title": "Untitled",
+           "catch_points": ["jepa applied to 3d brain mri.", "New point"]}
+    merged, changed = _merge_analysis(prev, new)
+    assert merged["title"] == "RisQ"                    # placeholder ignored
+    assert merged["catch_points"] == ["JEPA applied to 3D brain MRI", "New point"]
+    assert changed is True
+    # Re-running the identical merge must not grow the list any further.
+    again, changed2 = _merge_analysis(merged, new)
+    assert again["catch_points"] == merged["catch_points"] and changed2 is False
+
+
+def test_exact_resend_does_not_reanalyse_or_bloat():
+    """Byte-identical re-send whose row still exists returns updated/unchanged
+    WITHOUT re-running the LLM or rewriting the row (was ballooning cells)."""
+    import tempfile
+    import os as _os
+    _os.environ.update(
+        TELEGRAM_BOT_TOKEN="x", ANTHROPIC_API_KEY="x", LOGIN_PASSWORD="p",
+        ALLOWED_CHAT_IDS="1", BRIEFER_BOOTSTRAP="1", ENABLE_WEB_SEARCH="0",
+        FOLLOW_NESTED_LINKS="0", DATA_DIR=tempfile.mkdtemp())
+    from briefer.config import load_config
+    from briefer.enrich import Enricher
+    from briefer.pipeline import Pipeline
+    from briefer.storage import Store
+
+    cfg = load_config()
+    store = Store(cfg.db_path)
+
+    class LLM:
+        model = "m"; verify_model = "v"
+        def __init__(self): self.analyses = 0
+        def json(self, sy, u, *, verify=False, images=None, model=None, max_tokens=2000):
+            if "Classify" in sy:
+                return {"type": "article"}
+            if "fact-checker" in sy:
+                return {"verified": True, "issues": [], "corrected": {}}
+            self.analyses += 1
+            return {"title": "RisQ", "summary": "d", "catch_points": ["a"]}
+
+    class Sheets:
+        articles_id = "A"; events_id = "E"
+        def __init__(self): self.rows = {}; self.n = 1; self.appends = 0; self.updates = 0
+        def append_article(self, a, src, u, imgs=None, eid="", status=""):
+            self.n += 1; self.rows[eid] = self.n; self.appends += 1; return self.n
+        def append_event(self, *a, **k): return 1
+        def find_row_by_id(self, sheet, eid): return self.rows.get(eid)
+        def update_data_row(self, *a, **k): self.updates += 1
+
+    llm = LLM(); sh = Sheets()
+    p = Pipeline(cfg, llm, Enricher(cfg.max_download_bytes), sh, store)
+    r1 = p.process("https://x.com/risq", [], "me")
+    r2 = p.process("https://x.com/risq", [], "me")   # identical re-send
+    assert sh.appends == 1 and sh.updates == 0        # no new row, no rewrite
+    assert llm.analyses == 1                           # LLM not re-run
+    assert r2.updated is True and r2.changed is False
+    assert r2.entry_id == r1.entry_id
+    store.close()
+
+
 def test_office_docx_extraction():
     import io
     from docx import Document
