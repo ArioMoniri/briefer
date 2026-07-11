@@ -19,6 +19,7 @@ import httpx
 from bs4 import BeautifulSoup
 
 from .security import safe_resolve, clamp
+from .media import TWEET_RE, VIDEO_HOST_RE
 
 log = logging.getLogger("briefer.enrich")
 
@@ -31,11 +32,12 @@ _HEADERS = {"User-Agent": "BrieferBot/1.0 (+content-summariser)"}
 
 @dataclass
 class Attachment:
-    kind: str            # "image" | "pdf" | "file"
+    kind: str            # "image" | "pdf" | "file" | "media"
     media_type: str
     data_b64: str = ""   # for images (vision)
-    text: str = ""       # extracted text (pdf/file)
+    text: str = ""       # extracted text (pdf/file/transcript)
     filename: str = ""
+    raw: bytes = b""     # for media (audio/video) awaiting transcription
 
 
 @dataclass
@@ -76,8 +78,11 @@ class EnrichedContent:
 
 
 class Enricher:
-    def __init__(self, max_bytes: int) -> None:
+    def __init__(self, max_bytes: int, tweet_extractor=None,
+                 transcriber=None) -> None:
         self.max_bytes = max_bytes
+        self.tweets = tweet_extractor
+        self.transcriber = transcriber
         # If egress goes through an HTTP proxy, the proxy owns DNS + policy, so
         # IP-pinning is both unnecessary and can break the proxy tunnel. Only
         # pin on direct egress, where DNS-rebinding is a real concern.
@@ -164,20 +169,90 @@ class Enricher:
             "readme": readme,
         }
 
+    def _handle_tweet(self, url: str, content: EnrichedContent) -> bool:
+        try:
+            td = self.tweets.extract(url)
+        except Exception as exc:  # noqa: BLE001
+            log.warning("tweet extract failed for %s: %s", url, exc)
+            return False
+        if not td:
+            return False
+        rendered = td.render()
+        # Transcribe attached tweet videos (own + quoted/retweeted/reply).
+        for sub in (td, td.quoted, td.retweet_of, td.reply_to):
+            if not sub:
+                continue
+            for vurl in sub.video_urls:
+                if self.transcriber:
+                    tr = self.transcriber.transcribe_url(vurl)
+                    if tr.get("transcript"):
+                        rendered += f"\n[video transcript]: {tr['transcript']}"
+            for purl in sub.photo_urls[:4]:
+                resp = self._fetch(purl)
+                if resp and resp.headers.get("content-type", "").startswith("image/"):
+                    content.attachments.append(make_image_attachment(
+                        resp.content, resp.headers["content-type"].split(";")[0],
+                        "tweet_image"))
+        content.link_texts[url] = rendered
+        return True
+
+    def _handle_video(self, url: str, content: EnrichedContent) -> bool:
+        try:
+            res = self.transcriber.transcribe_url(url)
+        except Exception as exc:  # noqa: BLE001
+            log.warning("video transcribe failed for %s: %s", url, exc)
+            return False
+        block = f"Title: {res.get('title','')}\nUploader: {res.get('uploader','')}\n"
+        if res.get("transcript"):
+            block += "Transcript:\n" + res["transcript"]
+        else:
+            block += "(no transcript — " + (res.get("note") or "unavailable") + ")"
+        content.link_texts[url] = block
+        return True
+
+    def _transcribe_media_attachments(self, content: EnrichedContent) -> None:
+        if not self.transcriber:
+            return
+        import tempfile
+        for att in content.attachments:
+            if att.kind != "media" or not att.raw:
+                continue
+            suffix = "." + (att.filename.rsplit(".", 1)[-1] if "." in att.filename
+                            else "bin")
+            try:
+                with tempfile.NamedTemporaryFile(suffix=suffix, delete=True) as fh:
+                    fh.write(att.raw)
+                    fh.flush()
+                    att.text = self.transcriber.transcribe_file(fh.name)
+            except Exception as exc:  # noqa: BLE001
+                log.warning("media transcription failed: %s", exc)
+                att.text = "(could not transcribe uploaded media)"
+            att.raw = b""  # free memory
+
     def enrich(self, text: str, attachments: list[Attachment]) -> EnrichedContent:
         content = EnrichedContent(raw_text=text or "", attachments=attachments)
+        self._transcribe_media_attachments(content)
         urls = list(dict.fromkeys(URL_RE.findall(text or "")))
         content.urls = urls
 
         for url in urls:
             if _LUMA_RE.match(url):
                 content.luma_urls.append(url)
+            # Tweets: extract the post + reply-parent + quoted/retweeted original,
+            # pull in photos for vision, and transcribe any attached video.
+            if self.tweets and TWEET_RE.match(url):
+                if self._handle_tweet(url, content):
+                    continue
             gh = _GITHUB_RE.match(url)
             if gh:
                 repo = self._github(gh.group(1), gh.group(2))
                 if repo:
                     content.github_repos.append(repo)
                     continue  # repo readme is richer than the html page
+            # Video links (YouTube/X/Vimeo/TikTok…): transcribe.
+            if self.transcriber and VIDEO_HOST_RE.match(url):
+                if self._handle_video(url, content):
+                    continue
             resp = self._fetch(url)
             if not resp:
                 content.notes.append(f"Could not fetch {url} (blocked or unreachable).")
@@ -231,3 +306,9 @@ def make_text_attachment(data: bytes, filename: str, media_type: str) -> Attachm
         text=data.decode("utf-8", "replace"),
         filename=filename,
     )
+
+
+def make_media_attachment(data: bytes, media_type: str, filename: str) -> Attachment:
+    """Audio/video to be transcribed during enrichment."""
+    return Attachment(kind="media", media_type=media_type, raw=data,
+                      filename=filename or "media")

@@ -82,6 +82,13 @@ class Config:
     company_url: str
     company_focus: str
 
+    # Media (tweets / video)
+    twitter_bearer_token: str
+    enable_transcription: bool
+    whisper_model: str
+    transcription_max_seconds: int
+    media_max_bytes: int
+
     # Behaviour
     max_download_bytes: int
     rate_limit_per_minute: int
@@ -172,6 +179,11 @@ def load_config() -> Config:
         token_file=_get("GOOGLE_TOKEN_FILE", "token.json"),
         articles_sheet_id=_get("ARTICLES_SHEET_ID"),
         events_sheet_id=_get("EVENTS_SHEET_ID"),
+        twitter_bearer_token=_get("TWITTER_BEARER_TOKEN"),
+        enable_transcription=_get_bool("ENABLE_TRANSCRIPTION", True),
+        whisper_model=_get("WHISPER_MODEL", "base"),
+        transcription_max_seconds=_get_int("TRANSCRIPTION_MAX_SECONDS", 1800),
+        media_max_bytes=_get_int("MEDIA_MAX_BYTES", 50_000_000),
         company_name=_get("COMPANY_NAME", "Vivax"),
         company_url=_get("COMPANY_URL", "https://getvivax.com"),
         company_focus=_get(

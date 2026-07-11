@@ -58,11 +58,11 @@ install_pkgs() {
   say "Installing system dependencies via $pm…"
   local SUDO=""; [ "$IS_ROOT" -eq 0 ] && command -v sudo >/dev/null && SUDO="sudo"
   case "$pm" in
-    apt-get) $SUDO apt-get update -y && $SUDO apt-get install -y python3 python3-venv python3-pip git curl ca-certificates ;;
-    dnf|yum) $SUDO "$pm" install -y python3 python3-pip git curl ca-certificates ;;
-    apk)     $SUDO apk add --no-cache python3 py3-pip git curl ca-certificates ;;
-    pacman)  $SUDO pacman -Sy --noconfirm python python-pip git curl ca-certificates ;;
-    zypper)  $SUDO zypper install -y python3 python3-pip git curl ca-certificates ;;
+    apt-get) $SUDO apt-get update -y && $SUDO apt-get install -y python3 python3-venv python3-pip git curl ca-certificates ffmpeg ;;
+    dnf|yum) $SUDO "$pm" install -y python3 python3-pip git curl ca-certificates ffmpeg ;;
+    apk)     $SUDO apk add --no-cache python3 py3-pip git curl ca-certificates ffmpeg ;;
+    pacman)  $SUDO pacman -Sy --noconfirm python python-pip git curl ca-certificates ffmpeg ;;
+    zypper)  $SUDO zypper install -y python3 python3-pip git curl ca-certificates ffmpeg ;;
   esac
   ok "System dependencies ready"
 }
@@ -133,6 +133,14 @@ else
   read -rp "Timezone [Europe/Istanbul]: " TZ_IN
   TZ_IN="${TZ_IN:-Europe/Istanbul}"
 
+  echo
+  say "Media parsing (tweets + video/audio transcription):"
+  read -rp "X/Twitter API bearer token (optional, blank = no-auth best-effort): " XTOKEN
+  read -rp "Transcribe videos/audio with local Whisper? [Y/n]: " TR_IN
+  case "${TR_IN:-Y}" in n|N) ENABLE_TR=0 ;; *) ENABLE_TR=1 ;; esac
+  read -rp "Whisper model (tiny/base/small/medium) [base]: " WMODEL
+  WMODEL="${WMODEL:-base}"
+
   BOOT=0; [ -z "${CHAT_IDS:-}" ] && BOOT=1
 
   umask 077
@@ -153,6 +161,11 @@ GOOGLE_OAUTH_CLIENT_FILE=${OAUTH_CLIENT}
 GOOGLE_TOKEN_FILE=token.json
 ARTICLES_SHEET_ID=${ART_ID}
 EVENTS_SHEET_ID=${EVT_ID}
+TWITTER_BEARER_TOKEN=${XTOKEN}
+ENABLE_TRANSCRIPTION=${ENABLE_TR}
+WHISPER_MODEL=${WMODEL}
+TRANSCRIPTION_MAX_SECONDS=1800
+MEDIA_MAX_BYTES=50000000
 COMPANY_NAME=Vivax
 COMPANY_URL=https://getvivax.com
 COMPANY_FOCUS=Medical AI, medical education, clinical simulation, and operating-room intelligence ("Reality Motors").

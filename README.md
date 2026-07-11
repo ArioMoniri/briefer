@@ -1,8 +1,9 @@
 # Briefer 🎯
 
 A secure, self-healing **Telegram intake analyst**. Forward it anything —
-articles, posts, links, PDFs, images/screenshots, GitHub repos, or event /
-Luma pages — and it will:
+articles, posts, links, PDFs, images/screenshots, **videos & voice notes**,
+**tweets/X posts** (incl. the replied-to and quoted/retweeted originals),
+YouTube/Vimeo/TikTok links, GitHub repos, or event / Luma pages — and it will:
 
 - **Summarise** the item and extract the **catch points**.
 - Explain **where [Vivax](https://getvivax.com) could use it** (tailored to
@@ -102,6 +103,20 @@ Put your own id(s) in `ALLOWED_CHAT_IDS`/`ADMIN_CHAT_IDS` at setup. To add
 teammates afterwards, just send `/allow <their_chat_id>` from an admin chat —
 no restart, no file editing. They still need the shared `/login` password.
 Runtime additions persist in the local DB and appear in `/allowlist`.
+
+## Video & tweet parsing
+
+- **Tweets / X posts**: send a status link and Briefer extracts the post text,
+  the tweet it's **replying to**, any **quoted** or **retweeted** original
+  (with its text), and attached **photos** (read via vision) and **videos**
+  (transcribed). Set `TWITTER_BEARER_TOKEN` for the reliable official API;
+  otherwise it uses a no-auth best-effort scraper.
+- **Videos & audio**: uploaded video/voice notes, and YouTube/Vimeo/TikTok/X
+  video links, are **transcribed** — YouTube uses captions when available,
+  otherwise a local **Whisper** model (`faster-whisper`, CPU) does the
+  transcription. Controlled by `ENABLE_TRANSCRIPTION` / `WHISPER_MODEL`.
+  Needs `ffmpeg` (installed by `setup.sh`). Turn it off with
+  `ENABLE_TRANSCRIPTION=0` on tiny servers.
 
 ## Networking / firewall
 

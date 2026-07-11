@@ -107,6 +107,36 @@ def test_ics_escapes_bare_cr():
     assert "SUMMARY:A\\nEND:VEVENT" in ics
 
 
+def test_media_regexes_and_tweet_parse():
+    from briefer import media as m
+    assert m.TWEET_RE.match("https://x.com/u/status/1790000000000000000")
+    assert m.TWEET_RE.match("https://twitter.com/u/status/123")
+    assert m.VIDEO_HOST_RE.match("https://youtu.be/abcdefghijk")
+    assert m.VIDEO_HOST_RE.match("https://x.com/u/status/9")
+    # token is deterministic and strips 0s/dots
+    tok = m._syndication_token("1790000000000000000")
+    assert tok and "0" not in tok and "." not in tok
+    j = {
+        "text": "main", "user": {"screen_name": "alice"},
+        "in_reply_to_screen_name": "bob",
+        "parent": {"text": "p", "user": {"screen_name": "bob"}},
+        "quoted_tweet": {"text": "q", "user": {"screen_name": "carol"}},
+        "retweeted_status": {"text": "r", "user": {"screen_name": "dave"}},
+        "mediaDetails": [
+            {"type": "photo", "media_url_https": "https://pbs.twimg.com/x.jpg"},
+            {"type": "video", "video_info": {"variants": [
+                {"type": "video/mp4", "src": "https://v/hi.mp4", "bitrate": 800000}]}},
+        ],
+    }
+    td = m._parse_syndication(j, "https://x.com/alice/status/1")
+    assert td.is_reply and td.reply_to.author == "bob"
+    assert td.quoted.author == "carol" and td.retweet_of.author == "dave"
+    assert td.photo_urls == ["https://pbs.twimg.com/x.jpg"]
+    assert td.video_urls == ["https://v/hi.mp4"]
+    r = td.render()
+    assert "@alice" in r and "Reposted" in r and "Quoted" in r and "reply" in r.lower()
+
+
 def test_clamp():
     assert clamp("abc", 10) == "abc"
     assert "truncated" in clamp("a" * 100, 10)

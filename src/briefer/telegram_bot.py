@@ -23,7 +23,7 @@ from . import menus
 from .calendar_ics import build_event_ics
 from .config import Config
 from .enrich import (Attachment, make_image_attachment, make_pdf_attachment,
-                     make_text_attachment)
+                     make_text_attachment, make_media_attachment)
 from .pipeline import Pipeline, Result
 from .security import RateLimiter, verify_password, hash_password
 from .storage import Store
@@ -331,6 +331,19 @@ class BrieferBot:
             f = await photo.get_file()
             data = bytes(await f.download_as_bytearray())
             out.append(make_image_attachment(data, "image/jpeg", "photo.jpg"))
+
+        # Video / audio / voice → transcribe. (Telegram bots can download up
+        # to ~20 MB; larger media should be sent as a link instead.)
+        media = msg.video or msg.video_note or msg.animation or msg.audio or msg.voice
+        if media is not None:
+            if (getattr(media, "file_size", 0) or 0) > limit:
+                raise _TooLarge("That media is too large to download (send a link).")
+            f = await media.get_file()
+            data = bytes(await f.download_as_bytearray())
+            mtype = getattr(media, "mime_type", "") or "application/octet-stream"
+            fname = getattr(media, "file_name", "") or ("media." + (
+                mtype.split("/")[-1] if "/" in mtype else "bin"))
+            out.append(make_media_attachment(data, mtype, fname))
 
         doc = msg.document
         if doc:
@@ -657,7 +670,9 @@ def build_application(cfg: Config, bot: BrieferBot) -> Application:
         "event", lambda u, c: bot.cmd_force("event", u, c)))
     app.add_handler(CallbackQueryHandler(bot.on_callback))
     app.add_handler(MessageHandler(
-        (filters.TEXT | filters.PHOTO | filters.Document.ALL) & ~filters.COMMAND,
+        (filters.TEXT | filters.PHOTO | filters.Document.ALL | filters.VIDEO
+         | filters.VIDEO_NOTE | filters.ANIMATION | filters.AUDIO | filters.VOICE)
+        & ~filters.COMMAND,
         bot.on_message))
 
     if app.job_queue:

@@ -52,9 +52,16 @@ def main() -> int:
     # Lazy import so a missing google dep in bootstrap doesn't block discovery.
     from .sheets import SheetsClient
 
+    from .media import TweetExtractor, VideoTranscriber
+
     store = Store(cfg.db_path)
     llm = LLM(cfg.anthropic_api_key, cfg.model, cfg.verify_model)
-    enricher = Enricher(cfg.max_download_bytes)
+    tweets = TweetExtractor(cfg.twitter_bearer_token)
+    transcriber = VideoTranscriber(
+        cfg.enable_transcription, cfg.whisper_model,
+        cfg.transcription_max_seconds, cfg.media_max_bytes)
+    enricher = Enricher(cfg.max_download_bytes, tweet_extractor=tweets,
+                        transcriber=transcriber)
     try:
         sheets = SheetsClient(
             cfg.google_auth_mode, str(cfg.service_account_path),

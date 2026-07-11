@@ -12,3 +12,10 @@ pypdf==5.0.1
 python-dotenv==1.0.1
 tenacity==9.0.0
 pillow==11.0.0
+
+# Rich media: X/Twitter + video transcription
+yt-dlp==2024.12.13
+youtube-transcript-api==0.6.2
+# Local speech-to-text (CPU, int8). Heavy-ish; downloads a model on first
+# use. Disable with ENABLE_TRANSCRIPTION=0 if you don't need video/audio.
+faster-whisper==1.0.3
