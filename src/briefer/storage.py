@@ -382,6 +382,17 @@ class Store:
             self._conn.commit()
             return cur.rowcount
 
+    def cancel_sheet_reminders(self, entry_id: str) -> int:
+        """Cancel only reminders that were set from the sheet's Remind At cell,
+        so a changed/cleared cell can be re-synced without touching the
+        auto deadline/event pokes."""
+        with self._lock:
+            cur = self._conn.execute(
+                "UPDATE reminders SET fired = 1 WHERE entry_id = ? AND fired = 0 "
+                "AND json_extract(payload, '$.source') = 'sheet'", (entry_id,))
+            self._conn.commit()
+            return cur.rowcount
+
     def due_reminders(self, now: float) -> list[dict[str, Any]]:
         with self._lock:
             rows = self._conn.execute(
@@ -412,6 +423,19 @@ class Store:
              "title": r[3], "payload": json.loads(r[4] or "{}")}
             for r in rows
         ]
+
+    def all_reminders(self, chat_id: int) -> list[dict[str, Any]]:
+        """Every not-yet-fired reminder for one chat, any time (no window).
+        Used by the calendar, which needs past and far-future dates alike."""
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT id, chat_id, fire_at, title, payload FROM reminders "
+                "WHERE chat_id = ? AND fired = 0 ORDER BY fire_at",
+                (chat_id,)).fetchall()
+        return [
+            {"id": r[0], "chat_id": r[1], "fire_at": r[2],
+             "title": r[3], "payload": json.loads(r[4] or "{}")}
+            for r in rows]
 
     def mark_reminder_fired(self, reminder_id: int) -> None:
         with self._lock:

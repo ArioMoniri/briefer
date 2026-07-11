@@ -67,14 +67,20 @@ class SheetSync:
         prev = entry.get("sheet_remind_at")
         if prev and abs(ts - float(prev)) < 60:
             return  # already scheduled this exact time
+        # The Remind At cell changed (or is new) → drop the old sheet reminder
+        # and schedule the new time, so edits take effect in real time without
+        # leaving a stale/duplicate poke behind.
+        self.store.cancel_sheet_reminders(entry["id"])
         self.store.add_reminder(
             entry["chat_id"], ts, entry.get("title", "item"),
-            {"kind": "custom", "title": entry.get("title", "item"),
+            {"kind": "custom", "source": "sheet",
+             "title": entry.get("title", "item"),
              "note": "Reminder set from the sheet.",
              "when": when.strftime("%Y-%m-%d %H:%M")},
             entry_id=entry["id"])
         self.store.set_entry_sheet_remind(entry["id"], ts)
-        log.info("Sheet reminder for %s at %s", entry["id"], when.isoformat())
+        log.info("Sheet reminder for %s (re)scheduled at %s",
+                 entry["id"], when.isoformat())
 
     def _sync_sheet(self, sheet: str) -> None:
         ws = self.sheets.worksheet(sheet)
@@ -124,7 +130,10 @@ class SheetSync:
             if remind_raw:
                 self._maybe_sheet_reminder(entry, remind_raw)
             elif entry.get("sheet_remind_at"):
-                self.store.set_entry_sheet_remind(eid, None)  # cleared
+                # Cell cleared → cancel the pending sheet reminder in real time.
+                self.store.cancel_sheet_reminders(eid)
+                self.store.set_entry_sheet_remind(eid, None)
+                log.info("Sheet Remind At cleared for %s — reminder cancelled", eid)
             if done and entry["checked_at"] is None:
                 now = time.time()
                 self.store.set_entry_checked(eid, now)

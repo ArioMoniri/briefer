@@ -21,7 +21,7 @@ from typing import Any
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 
 # icon per item kind
-_ICON = {"deadline": "⏰", "event": "📅", "reminder": "🔔"}
+_ICON = {"deadline": "⏰", "event": "📅", "reminder": "📌"}
 
 
 @dataclass
@@ -44,10 +44,14 @@ def _parse(value: Any):
 
 
 def collect_items(store, chat_id: int) -> list[CalItem]:
-    """Every dated item for this chat: each article/event contributes at most
-    one *deadline* and one *event date* — the real dates, once each. The
-    72h/24h/3h reminder pokes are deliberately excluded (the calendar shows
-    the deadline itself, not the nudges leading up to it)."""
+    """Every dated item for this chat:
+
+    • each article/event's real *deadline* (⏰) and *event date* (📅), once each;
+    • every reminder YOU set (📌) — a `remind me …` or a date typed in the
+      sheet's **Remind At** column.
+
+    Only the automatic 72h/24h/3h lead-up pokes are excluded (they're nudges
+    toward a deadline that's already shown, not separate dates)."""
     items: list[CalItem] = []
     for sheet in ("article", "event"):
         for e in store.active_entries(sheet):
@@ -61,6 +65,18 @@ def collect_items(store, chat_id: int) -> list[CalItem]:
             ev = _parse(a.get("event_date"))
             if ev:
                 items.append(CalItem(ev, "event", title, sheet))
+    # User-set reminders (remind-me + sheet Remind At). Exclude the automatic
+    # deadline/event lead-up pokes, which duplicate the dates above.
+    try:
+        for r in store.all_reminders(chat_id):
+            payload = r.get("payload") or {}
+            if payload.get("kind") in ("deadline", "event_date"):
+                continue
+            items.append(CalItem(
+                datetime.fromtimestamp(r["fire_at"]), "reminder",
+                str(payload.get("title") or r.get("title") or "Reminder"), ""))
+    except Exception:  # noqa: BLE001 — reminders are a bonus, never fatal
+        pass
     # De-dupe (same day + kind + title).
     seen: set[tuple] = set()
     out: list[CalItem] = []
@@ -164,7 +180,7 @@ _HTML_TEMPLATE = r"""<!doctype html>
 <title>Briefer — Calendar</title>
 <style>
 :root{--bg:#0f1115;--panel:#171a21;--line:#262b36;--txt:#e6e9ef;--muted:#8b93a7;
---deadline:#ff6b5e;--event:#4c9aff;--today:#2d6cdf22;}
+--deadline:#ff6b5e;--event:#4c9aff;--reminder:#a970ff;--today:#2d6cdf22;}
 @media (prefers-color-scheme:light){:root{--bg:#f6f7f9;--panel:#fff;--line:#e3e6ec;
 --txt:#1a1d24;--muted:#6b7280;--today:#2d6cdf14;}}
 *{box-sizing:border-box}body{margin:0;font:14px/1.4 -apple-system,Segoe UI,Roboto,sans-serif;
@@ -186,6 +202,7 @@ border:1px solid var(--line)}
 .ev{font-size:11px;border-radius:5px;padding:2px 5px;margin:2px 0;color:#fff;
 white-space:nowrap;overflow:hidden;text-overflow:ellipsis;cursor:default}
 .ev.deadline{background:var(--deadline)}.ev.event{background:var(--event)}
+.ev.reminder{background:var(--reminder)}.dot.reminder{background:var(--reminder)}
 .list .row{display:flex;gap:10px;padding:9px 16px;border-bottom:1px solid var(--line);align-items:baseline}
 .list .d{color:var(--muted);min-width:130px}
 .dot{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:6px}
@@ -212,7 +229,8 @@ white-space:nowrap;overflow:hidden;text-overflow:ellipsis;cursor:default}
   <button data-v="list"  onclick="setView('list')">List</button>
 </header>
 <div class="legend"><span><span class="dot deadline"></span>Deadline</span>
-<span><span class="dot event"></span>Event date</span></div>
+<span><span class="dot event"></span>Event date</span>
+<span><span class="dot reminder"></span>Reminder</span></div>
 <div id="root" class="wrap"></div>
 <script>
 const EVENTS = /*__EVENTS__*/;

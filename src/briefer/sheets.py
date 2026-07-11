@@ -297,6 +297,19 @@ class SheetsClient:
     def worksheet(self, sheet: str) -> gspread.Worksheet:
         return self._events if sheet == "event" else self._articles
 
+    def _first_empty_row(self, ws) -> int | None:
+        """First blank data row (row 2+). Fills the sheet top-down instead of
+        letting gspread's append land far below a block of empty rows (which
+        happens once old rows have been cleared/deleted)."""
+        try:
+            colA = ws.col_values(1)  # 'Captured At' — always set on our rows
+        except Exception:  # noqa: BLE001
+            return None
+        for i, v in enumerate(colA[1:], start=2):  # skip header
+            if not str(v).strip():
+                return i
+        return len(colA) + 1  # contiguous → straight after the last row
+
     def _append(self, sheet: str, data: list[str], entry_id: str,
                 images: list[tuple[bytes, str]] | None,
                 status: str = "") -> int | None:
@@ -306,9 +319,20 @@ class SheetsClient:
         # Trailing: Image, ID, Done, Checked At, Time, Notes, My Tags, Remind
         # At, Status. Done left blank; _make_checkbox sets a real boolean.
         row = data + ["", entry_id, "", "", "", "", "", "", status]
-        # RAW: untrusted content is never parsed as a formula.
-        resp = ws.append_row(row, value_input_option="RAW")
-        rownum = _appended_row_number(resp)
+        rownum = self._first_empty_row(ws)
+        if rownum:
+            # Write into the first empty row so content fills from the top.
+            last = _col_letter(len(row))
+            try:
+                ws.update([row], f"A{rownum}:{last}{rownum}",
+                          value_input_option="RAW")  # RAW: never parse formulas
+            except Exception as exc:  # noqa: BLE001 — fall back to append
+                log.warning("placed-row write failed (%s); appending", exc)
+                rownum = _appended_row_number(
+                    ws.append_row(row, value_input_option="RAW"))
+        else:
+            rownum = _appended_row_number(
+                ws.append_row(row, value_input_option="RAW"))
         self._save_image(ws, rownum, cols["image"], images)
         if rownum:
             self._make_checkbox(ws, rownum, cols["done"])

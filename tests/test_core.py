@@ -231,10 +231,29 @@ def test_merge_dedups_reworded_bullets_and_keeps_good_scalars():
     assert again["catch_points"] == merged["catch_points"] and changed2 is False
 
 
-def test_calendar_shows_deadlines_and_events_not_reminder_pokes():
-    """The calendar is built from entries (one deadline + one event date each),
-    never from the 72h/24h/3h reminder rows."""
+def test_first_empty_row_fills_from_top():
+    """New rows go into the first blank row, not far below a block of cleared
+    rows (the 'adds at row 996 while the top is empty' bug)."""
+    from briefer.sheets import SheetsClient
+
+    class WS:
+        def __init__(self, colA): self._colA = colA
+        def col_values(self, c): return self._colA
+    sc = SheetsClient.__new__(SheetsClient)   # bypass __init__ (no Google needed)
+    # header + two rows of data far down, everything above them cleared
+    colA = ["Captured At", "", "", "2026 RisQ"]      # blanks at rows 2,3
+    assert sc._first_empty_row(WS(colA)) == 2
+    # contiguous data → straight after the last row
+    assert sc._first_empty_row(WS(["Captured At", "a", "b"])) == 4
+    # empty sheet → row 2
+    assert sc._first_empty_row(WS(["Captured At"])) == 2
+
+
+def test_calendar_shows_deadlines_events_and_user_reminders_not_pokes():
+    """Calendar shows each entry's deadline + event date once, PLUS user-set
+    reminders (remind-me / sheet Remind At) — but NOT the auto 72/24/3h pokes."""
     import tempfile
+    from datetime import datetime
     from briefer.storage import Store
     from briefer import calendar_view
     s = Store(tempfile.mktemp())
@@ -242,14 +261,39 @@ def test_calendar_shows_deadlines_and_events_not_reminder_pokes():
                 {"title": "Simya Demo Day",
                  "application_deadline": "2026-09-03",
                  "event_date": "2026-11-03T21:00"}, "event|simya|2026-11-03")
-    # A reminder poke that must NOT appear as its own calendar item.
-    s.add_reminder(7, 1.0e9, "Simya Demo Day",
+    # Auto deadline poke — must NOT appear as its own calendar item.
+    s.add_reminder(7, datetime(2026, 9, 1).timestamp(), "Simya Demo Day",
                    {"kind": "deadline", "title": "Simya Demo Day"}, entry_id="e1")
+    # A reminder the USER set from the sheet's Remind At column — MUST appear.
+    s.add_reminder(7, datetime(2026, 10, 1, 9, 0).timestamp(), "RisQ follow-up",
+                   {"kind": "custom", "source": "sheet", "title": "RisQ follow-up"},
+                   entry_id="a1")
     items = calendar_view.collect_items(s, 7)
-    kinds = sorted((it.kind, it.when.strftime("%Y-%m-%d")) for it in items)
-    assert kinds == [("deadline", "2026-09-03"), ("event", "2026-11-03")]
+    got = sorted((it.kind, it.when.strftime("%Y-%m-%d")) for it in items)
+    assert got == [("deadline", "2026-09-03"), ("event", "2026-11-03"),
+                   ("reminder", "2026-10-01")]
     html_doc = calendar_view.build_html(items)
-    assert "Simya Demo Day" in html_doc and html_doc.count('"kind"') == 2
+    assert "Simya Demo Day" in html_doc and "RisQ follow-up" in html_doc
+
+
+def test_sheet_remind_at_change_cancels_old_reminder():
+    """Editing the Remind At cell cancels the previous sheet reminder so no
+    stale/duplicate poke survives (real-time sync)."""
+    import tempfile
+    from datetime import datetime
+    from briefer.storage import Store
+    from briefer.sheet_sync import SheetSync
+    s = Store(tempfile.mktemp())
+    s.add_entry("e1", 7, "article", "fp1", "RisQ",
+                {"title": "RisQ"}, "article|risq|")
+    sync = SheetSync(sheets=None, store=s, timezone="UTC")
+    entry = s.entry_by_fingerprint("fp1")
+    sync._maybe_sheet_reminder(entry, "2026-09-01 09:00")
+    entry = s.entry_by_fingerprint("fp1")            # refresh sheet_remind_at
+    sync._maybe_sheet_reminder(entry, "2026-10-01 09:00")   # user edits the cell
+    live = s.all_reminders(7)
+    assert len(live) == 1   # old one cancelled, only the new time survives
+    assert datetime.fromtimestamp(live[0]["fire_at"]).strftime("%Y-%m-%d") == "2026-10-01"
     s.close()
 
 
