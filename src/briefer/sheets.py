@@ -298,17 +298,19 @@ class SheetsClient:
         return self._events if sheet == "event" else self._articles
 
     def _first_empty_row(self, ws) -> int | None:
-        """First blank data row (row 2+). Fills the sheet top-down instead of
-        letting gspread's append land far below a block of empty rows (which
-        happens once old rows have been cleared/deleted)."""
+        """First *completely* blank data row (row 2+). Fills the sheet top-down
+        instead of letting gspread's append land far below a block of cleared
+        rows — while skipping any row you filled in by hand: a row counts as
+        occupied if ANY cell in it has content, so manual notes/rows are never
+        overwritten."""
         try:
-            colA = ws.col_values(1)  # 'Captured At' — always set on our rows
+            values = ws.get_all_values()
         except Exception:  # noqa: BLE001
             return None
-        for i, v in enumerate(colA[1:], start=2):  # skip header
-            if not str(v).strip():
+        for i, row in enumerate(values[1:], start=2):  # skip header
+            if not any(str(c).strip() for c in row):
                 return i
-        return len(colA) + 1  # contiguous → straight after the last row
+        return len(values) + 1  # no gap → straight after the last row
 
     def _append(self, sheet: str, data: list[str], entry_id: str,
                 images: list[tuple[bytes, str]] | None,

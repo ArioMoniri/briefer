@@ -231,22 +231,24 @@ def test_merge_dedups_reworded_bullets_and_keeps_good_scalars():
     assert again["catch_points"] == merged["catch_points"] and changed2 is False
 
 
-def test_first_empty_row_fills_from_top():
-    """New rows go into the first blank row, not far below a block of cleared
-    rows (the 'adds at row 996 while the top is empty' bug)."""
+def test_first_empty_row_fills_from_top_and_skips_manual_rows():
+    """New rows go into the first *fully* blank row — skipping any row the user
+    filled in by hand (content in any column), never overwriting it."""
     from briefer.sheets import SheetsClient
 
     class WS:
-        def __init__(self, colA): self._colA = colA
-        def col_values(self, c): return self._colA
+        def __init__(self, rows): self._rows = rows
+        def get_all_values(self): return self._rows
     sc = SheetsClient.__new__(SheetsClient)   # bypass __init__ (no Google needed)
-    # header + two rows of data far down, everything above them cleared
-    colA = ["Captured At", "", "", "2026 RisQ"]      # blanks at rows 2,3
-    assert sc._first_empty_row(WS(colA)) == 2
+    H = ["Captured At", "Title"]
+    # blanks at rows 2,3, data far down → first empty is row 2
+    assert sc._first_empty_row(WS([H, ["", ""], ["", ""], ["2026", "RisQ"]])) == 2
+    # a manual row (note in col B, blank col A) at row 2 must be SKIPPED
+    assert sc._first_empty_row(WS([H, ["", "my manual note"], ["", ""]])) == 3
     # contiguous data → straight after the last row
-    assert sc._first_empty_row(WS(["Captured At", "a", "b"])) == 4
+    assert sc._first_empty_row(WS([H, ["a", "x"], ["b", "y"]])) == 4
     # empty sheet → row 2
-    assert sc._first_empty_row(WS(["Captured At"])) == 2
+    assert sc._first_empty_row(WS([H])) == 2
 
 
 def test_calendar_shows_deadlines_events_and_user_reminders_not_pokes():
