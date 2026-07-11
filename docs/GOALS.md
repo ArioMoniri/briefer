@@ -23,6 +23,12 @@ Every requirement from the original brief, and where it lives.
 | 17 | **No injection / no server risk from the bot** | ✅ | no shell exec of input, SSRF guard, prompt-injection guard, systemd hardening — see `docs/SECURITY.md` |
 | 18 | **A single `.sh`** to transfer + **self-healing** + **setup wizard** + writes needed `.env` | ✅ | `setup.sh` (wizard writes `.env`), self-healing via systemd+cron |
 | 19 | Add whatever improves security / usability / features | ✅ | rate limiting, dedup, per-item confidence, verified badge, `/deadlines`, `/status`, `/sheets`, log redaction, reminders persisted across restarts |
+| 20 | **Log in to Google** in the wizard, headless (no UI) via a link | ✅ | `authorize_google.py`, `./manage.sh google-auth`, `GOOGLE_AUTH_MODE=oauth`; also supports service account |
+| 21 | Everything over **port 443** (odd ports like 993 may be blocked) | ✅ | outbound 443 only, no inbound; fetch restricted to 80/443; see README “Networking” |
+| 22 | **Add other allowed chats later** | ✅ | `/allow` `/deny` `/allowlist` (admin), persisted in DB, no restart |
+| 23 | **Cumulative append** of every new item | ✅ | append-only sheets (`sheets.py`) |
+| 24 | Event **`.ics` calendar files** sent in Telegram, addable on Apple/Android | ✅ | `calendar_ics.py`, sent as a document + Google Calendar button |
+| 25 | ICS **alarms**: day-of, 2h and 1h before the event | ✅ | 3 VALARMs per event (`build_event_ics`) |
 
 ## Runbook (server)
 ```bash

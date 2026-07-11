@@ -102,8 +102,26 @@ else
   read -rp "Login password [random: $DEF_PW]: " LOGIN_PW
   LOGIN_PW="${LOGIN_PW:-$DEF_PW}"
 
-  read -rp "Path to Google service-account JSON [service_account.json]: " SA_FILE
-  SA_FILE="${SA_FILE:-service_account.json}"
+  echo
+  say "Google Sheets access — pick how the bot authenticates:"
+  echo "  1) Log in with your Google account (OAuth). Sheets are created in"
+  echo "     YOUR Drive. This server has no browser, so it prints a LINK you"
+  echo "     open on your phone/laptop, then paste a code back. (recommended)"
+  echo "  2) Service account (a robot Google identity). You share the sheets"
+  echo "     with its email. No personal login."
+  read -rp "Choice [1]: " GAUTH_CHOICE
+  GAUTH_CHOICE="${GAUTH_CHOICE:-1}"
+  if [ "$GAUTH_CHOICE" = "2" ]; then
+    GAUTH_MODE="service_account"
+    read -rp "Path to Google service-account JSON [service_account.json]: " SA_FILE
+    SA_FILE="${SA_FILE:-service_account.json}"
+    OAUTH_CLIENT="client_secret.json"
+  else
+    GAUTH_MODE="oauth"
+    SA_FILE="service_account.json"
+    read -rp "Path to your OAuth 'Desktop app' client JSON [client_secret.json]: " OAUTH_CLIENT
+    OAUTH_CLIENT="${OAUTH_CLIENT:-client_secret.json}"
+  fi
 
   read -rp "Articles spreadsheet id (blank = auto-create): " ART_ID
   read -rp "Events spreadsheet id (blank = auto-create): " EVT_ID
@@ -121,12 +139,18 @@ else
   cat > .env <<EOF
 TELEGRAM_BOT_TOKEN=${TG_TOKEN}
 ALLOWED_CHAT_IDS=${CHAT_IDS}
+# Admins can /allow and /deny other chats at runtime. Defaults to the ids
+# above when left blank.
+ADMIN_CHAT_IDS=${CHAT_IDS}
 LOGIN_PASSWORD=${LOGIN_PW}
 BRIEFER_BOOTSTRAP=${BOOT}
 ANTHROPIC_API_KEY=${ANTHROPIC_KEY}
 ANTHROPIC_MODEL=${MODEL}
 ANTHROPIC_VERIFY_MODEL=${VMODEL}
+GOOGLE_AUTH_MODE=${GAUTH_MODE}
 GOOGLE_SERVICE_ACCOUNT_FILE=${SA_FILE}
+GOOGLE_OAUTH_CLIENT_FILE=${OAUTH_CLIENT}
+GOOGLE_TOKEN_FILE=token.json
 ARTICLES_SHEET_ID=${ART_ID}
 EVENTS_SHEET_ID=${EVT_ID}
 COMPANY_NAME=Vivax
@@ -141,9 +165,23 @@ LOG_LEVEL=INFO
 EOF
   chmod 600 .env
   ok "Wrote .env (permissions 600)"
+
+  # Offer to run the headless Google login now (OAuth mode).
+  if [ "$GAUTH_MODE" = "oauth" ]; then
+    if [ -f "$OAUTH_CLIENT" ]; then
+      say "Let's log in to Google now (a link will be printed)…"
+      ./.venv/bin/python authorize_google.py || \
+        warn "Google login not completed — run it later: ./manage.sh google-auth"
+    else
+      warn "OAuth client file '$OAUTH_CLIENT' not found yet."
+      warn "Create a 'Desktop app' OAuth client in Google Cloud, save the JSON"
+      warn "here as '$OAUTH_CLIENT', then run: ./manage.sh google-auth"
+    fi
+  fi
+
   if [ "$BOOT" -eq 1 ]; then
     warn "No chat id set → BOOTSTRAP mode. Start the bot, send /whoami, put the"
-    warn "id in ALLOWED_CHAT_IDS, set BRIEFER_BOOTSTRAP=0, then: ./manage.sh restart"
+    warn "id in ALLOWED_CHAT_IDS + ADMIN_CHAT_IDS, set BRIEFER_BOOTSTRAP=0, then: ./manage.sh restart"
   fi
   echo "Your login password is: $LOGIN_PW"
 fi
@@ -164,8 +202,10 @@ if [ "$IS_ROOT" -eq 1 ]; then
   # Secrets: readable (not writable) by the service user via its group.
   chown "root:$RUN_USER" .env 2>/dev/null || true
   chmod 640 .env 2>/dev/null || true
-  # Service account key, if present, same treatment.
-  [ -f service_account.json ] && { chown "root:$RUN_USER" service_account.json; chmod 640 service_account.json; }
+  # Google credential files, if present: readable by the service user, not writable.
+  for f in service_account.json token.json client_secret.json "${OAUTH_CLIENT:-}" "${SA_FILE:-}"; do
+    [ -n "${f:-}" ] && [ -f "$f" ] && { chown "root:$RUN_USER" "$f"; chmod 640 "$f"; }
+  done
 fi
 
 # --- 5. systemd service (self-healing) ------------------------------

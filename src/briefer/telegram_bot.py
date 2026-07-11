@@ -3,12 +3,15 @@ from __future__ import annotations
 
 import asyncio
 import html
+import io
 import logging
 import time
 from datetime import datetime, timedelta, timezone
 from typing import Any
+from urllib.parse import urlencode
 
-from telegram import Update
+from telegram import (Update, InputFile, InlineKeyboardButton,
+                      InlineKeyboardMarkup)
 from telegram.constants import ChatAction, ParseMode
 from telegram.ext import (
     Application, CommandHandler, ContextTypes, MessageHandler,
@@ -16,6 +19,7 @@ from telegram.ext import (
 )
 
 from . import menus
+from .calendar_ics import build_event_ics
 from .config import Config
 from .enrich import (Attachment, make_image_attachment, make_pdf_attachment,
                      make_text_attachment)
@@ -44,7 +48,11 @@ class BrieferBot:
     def _allowed(self, chat_id: int) -> bool:
         if self.cfg.bootstrap:
             return True
-        return chat_id in self.cfg.allowed_chat_ids
+        return (chat_id in self.cfg.allowed_chat_ids
+                or self.store.is_allowed(chat_id))
+
+    def _is_admin(self, chat_id: int) -> bool:
+        return chat_id in self.cfg.admins
 
     def _authed(self, chat_id: int) -> bool:
         return self.store.is_authed(chat_id, AUTH_TTL)
@@ -84,19 +92,25 @@ class BrieferBot:
 
     async def cmd_whoami(self, update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         chat = update.effective_chat
-        # Only reveal ids/access state in bootstrap discovery mode or to
-        # already-allowlisted chats. Strangers are ignored like everywhere else.
-        if not self.cfg.bootstrap and not self._allowed(chat.id):
-            log.warning("Ignoring /whoami from non-allowlisted id=%s", chat.id)
-            return
         user = update.effective_user
-        await self._reply(
-            update,
-            f"Your chat id: `{chat.id}`\n"
-            f"Your user id: `{user.id if user else '?'}`\n"
-            f"Allow-listed: {'yes' if self._allowed(chat.id) else 'no'}\n"
-            f"Logged in: {'yes' if self._authed(chat.id) else 'no'}",
-        )
+        # Always reveal the chat id so a new user can ask an admin to /allow
+        # them. Only reveal access-control STATE to already-allowlisted chats
+        # (so we don't confirm the bot's allowlist to strangers).
+        if self.cfg.bootstrap or self._allowed(chat.id):
+            await self._reply(
+                update,
+                f"Your chat id: `{chat.id}`\n"
+                f"Your user id: `{user.id if user else '?'}`\n"
+                f"Allow-listed: {'yes' if self._allowed(chat.id) else 'no'}\n"
+                f"Logged in: {'yes' if self._authed(chat.id) else 'no'}",
+            )
+        else:
+            await self._reply(
+                update,
+                f"Your chat id: `{chat.id}`\n"
+                "Ask an admin to run `/allow "
+                f"{chat.id}`, then `/login <password>`.",
+            )
 
     async def cmd_login(self, update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         chat = update.effective_chat
@@ -128,6 +142,58 @@ class BrieferBot:
         chat = update.effective_chat
         self.store.clear_auth(chat.id)
         await self._reply(update, "🔒 Logged out.")
+
+    # --- admin: manage the allow-list at runtime ---------------------
+    async def _require_admin(self, update: Update) -> bool:
+        chat = update.effective_chat
+        if not self._allowed(chat.id):
+            return False
+        if not self._is_admin(chat.id):
+            await self._reply(update, "⛔ Admins only.")
+            return False
+        if not self._authed(chat.id):
+            await self._reply(update, "🔒 Please `/login <password>` first.")
+            return False
+        return True
+
+    async def cmd_allow(self, update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+        if not await self._require_admin(update):
+            return
+        target = _parse_id(ctx.args)
+        if target is None:
+            await self._reply(update, "Usage: `/allow <chat_id>` (get it via /whoami).")
+            return
+        self.store.add_allowed(target, update.effective_chat.id,
+                               note=" ".join(ctx.args[1:]) if len(ctx.args) > 1 else "")
+        await self._reply(update, f"✅ Chat `{target}` is now allowed. They must "
+                                  "still `/login` with the password.")
+
+    async def cmd_deny(self, update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+        if not await self._require_admin(update):
+            return
+        target = _parse_id(ctx.args)
+        if target is None:
+            await self._reply(update, "Usage: `/deny <chat_id>`.")
+            return
+        if target in self.cfg.allowed_chat_ids:
+            await self._reply(update, "That id is pinned in .env; remove it there "
+                                      "and restart to revoke.")
+            return
+        self.store.remove_allowed(target)
+        self.store.clear_auth(target)
+        await self._reply(update, f"🚫 Chat `{target}` removed and logged out.")
+
+    async def cmd_allowlist(self, update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+        if not await self._require_admin(update):
+            return
+        env_ids = sorted(self.cfg.allowed_chat_ids)
+        dyn = self.store.list_allowed()
+        lines = ["👥 *Allow-list*", "", "*Pinned (.env):*"]
+        lines += [f"• `{i}`" for i in env_ids] or ["• (none)"]
+        lines += ["", "*Added at runtime:*"]
+        lines += [f"• `{d['chat_id']}` {('— ' + d['note']) if d['note'] else ''}"
+                  for d in dyn] or ["• (none)"]
+        await self._reply(update, "\n".join(lines))
 
     async def cmd_status(self, update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         if not await self._require_auth(update):
@@ -303,8 +369,64 @@ class BrieferBot:
         await note.edit_text(_format_catch(result), parse_mode=ParseMode.HTML,
                              disable_web_page_preview=True)
 
-        if result.kind == "event" and result.deadline_dt:
-            self._schedule_deadline(chat.id, result)
+        if result.kind == "event":
+            if result.deadline_dt:
+                self._schedule_deadline(chat.id, result)
+            await self._send_calendar(ctx, chat.id, result)
+
+    # ------------------------------------------------------------------
+    # Calendar (.ics) export
+    # ------------------------------------------------------------------
+    async def _send_calendar(self, ctx: ContextTypes.DEFAULT_TYPE, chat_id: int,
+                             result: Result) -> None:
+        a = result.analysis
+        # Prefer the event date; fall back to the application deadline so you
+        # still get a calendar entry + alarms for the last day to apply.
+        if result.event_dt:
+            start, all_day, label = result.event_dt, result.event_all_day, ""
+        elif result.deadline_dt:
+            start, all_day = result.deadline_dt, True
+            label = "Application deadline: "
+        else:
+            return
+
+        title = label + str(a.get("title", "Event"))
+        desc_parts = [str(a.get("summary", ""))]
+        if a.get("application_deadline"):
+            desc_parts.append(f"Deadline: {a['application_deadline']}")
+        if a.get("required_materials"):
+            desc_parts.append("Required: " + ", ".join(map(str, a["required_materials"])))
+        if a.get("application_url"):
+            desc_parts.append(f"Apply: {a['application_url']}")
+        description = "\n".join(p for p in desc_parts if p)
+
+        try:
+            ics = build_event_ics(
+                title=title, start=start, tz_name=self.cfg.timezone,
+                all_day=all_day, description=description,
+                location=str(a.get("location", "") or ""),
+                url=str(a.get("application_url", "") or a.get("event_url", "") or ""),
+            )
+        except Exception:  # noqa: BLE001
+            log.exception("ics build failed")
+            return
+
+        fname = _slug(title)[:40] + ".ics"
+        gcal = _gcal_link(title, start, all_day, description,
+                          str(a.get("location", "") or ""))
+        kb = InlineKeyboardMarkup(
+            [[InlineKeyboardButton("➕ Google Calendar", url=gcal)]]) if gcal else None
+        try:
+            await ctx.bot.send_document(
+                chat_id,
+                document=InputFile(io.BytesIO(ics), filename=fname),
+                caption="📅 Tap the file → *Add to Calendar* (Apple/Android). "
+                        "Reminders included: day-of, 2h and 1h before.",
+                parse_mode=ParseMode.MARKDOWN,
+                reply_markup=kb,
+            )
+        except Exception:  # noqa: BLE001
+            log.exception("failed to send ics")
 
     # ------------------------------------------------------------------
     # Deadline reminders
@@ -388,6 +510,40 @@ class _TooLarge(Exception):
     pass
 
 
+def _parse_id(args: list[str] | None) -> int | None:
+    if not args:
+        return None
+    try:
+        return int(args[0])
+    except (ValueError, TypeError):
+        return None
+
+
+def _slug(text: str) -> str:
+    keep = [c if (c.isalnum() or c in " -_") else "_" for c in text]
+    return ("".join(keep).strip().replace(" ", "_") or "event")
+
+
+def _gcal_link(title: str, start: datetime, all_day: bool, details: str,
+               location: str) -> str:
+    """Build a Google Calendar 'add event' template URL (fallback to ICS)."""
+    if start.tzinfo is None:
+        start = start.replace(tzinfo=timezone.utc)
+    if all_day:
+        s = start.strftime("%Y%m%d")
+        e = (start + timedelta(days=1)).strftime("%Y%m%d")
+        dates = f"{s}/{e}"
+    else:
+        su = start.astimezone(timezone.utc)
+        eu = (start + timedelta(hours=1)).astimezone(timezone.utc)
+        dates = f"{su.strftime('%Y%m%dT%H%M%SZ')}/{eu.strftime('%Y%m%dT%H%M%SZ')}"
+    params = {
+        "action": "TEMPLATE", "text": title, "dates": dates,
+        "details": details[:900], "location": location,
+    }
+    return "https://calendar.google.com/calendar/render?" + urlencode(params)
+
+
 def _submitter(user) -> str:
     if not user:
         return "unknown"
@@ -466,6 +622,9 @@ def build_application(cfg: Config, bot: BrieferBot) -> Application:
     app.add_handler(CommandHandler("whoami", bot.cmd_whoami))
     app.add_handler(CommandHandler("login", bot.cmd_login))
     app.add_handler(CommandHandler("logout", bot.cmd_logout))
+    app.add_handler(CommandHandler("allow", bot.cmd_allow))
+    app.add_handler(CommandHandler("deny", bot.cmd_deny))
+    app.add_handler(CommandHandler("allowlist", bot.cmd_allowlist))
     app.add_handler(CommandHandler("status", bot.cmd_status))
     app.add_handler(CommandHandler("sheets", bot.cmd_sheets))
     app.add_handler(CommandHandler("deadlines", bot.cmd_deadlines))

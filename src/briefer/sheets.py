@@ -12,7 +12,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 import gspread
-from google.oauth2.service_account import Credentials
+from google.oauth2.service_account import Credentials as SACredentials
 
 log = logging.getLogger("briefer.sheets")
 
@@ -20,6 +20,29 @@ _SCOPES = [
     "https://www.googleapis.com/auth/spreadsheets",
     "https://www.googleapis.com/auth/drive",
 ]
+
+
+def build_gspread_client(auth_mode: str, service_account_file: str,
+                         token_file: str):
+    """Return an authorized gspread client for either auth mode.
+
+    - service_account: uses the service-account JSON key.
+    - oauth: uses a previously-authorized user token (token.json) that the
+      `google-auth` layer auto-refreshes; created by authorize_google.py.
+    """
+    if auth_mode == "oauth":
+        from google.oauth2.credentials import Credentials as UserCredentials
+        from google.auth.transport.requests import Request
+
+        creds = UserCredentials.from_authorized_user_file(token_file, _SCOPES)
+        if creds and creds.expired and creds.refresh_token:
+            creds.refresh(Request())
+            with open(token_file, "w", encoding="utf-8") as fh:
+                fh.write(creds.to_json())
+        return gspread.authorize(creds)
+    creds = SACredentials.from_service_account_file(
+        service_account_file, scopes=_SCOPES)
+    return gspread.authorize(creds)
 
 ARTICLE_HEADERS = [
     "Captured At", "Title", "Type", "Summary", "Catch Points",
@@ -47,12 +70,9 @@ def _fmt(value: Any) -> str:
 
 
 class SheetsClient:
-    def __init__(self, service_account_file: str, articles_id: str,
-                 events_id: str) -> None:
-        creds = Credentials.from_service_account_file(
-            service_account_file, scopes=_SCOPES
-        )
-        self._gc = gspread.authorize(creds)
+    def __init__(self, auth_mode: str, service_account_file: str,
+                 token_file: str, articles_id: str, events_id: str) -> None:
+        self._gc = build_gspread_client(auth_mode, service_account_file, token_file)
         self._articles = self._open_or_create(articles_id, "Briefer — Articles",
                                               ARTICLE_HEADERS)
         self._events = self._open_or_create(events_id, "Briefer — Events",

@@ -60,6 +60,29 @@ def test_deadline_parsing():
     assert _parse_deadline(None) is None
 
 
+def test_event_date_parsing():
+    from briefer.pipeline import _parse_event_date
+    dt, allday = _parse_event_date("2026-08-01")
+    assert dt is not None and allday is True
+    dt, allday = _parse_event_date("2026-08-01T14:30")
+    assert dt is not None and allday is False
+    dt, allday = _parse_event_date("2026-08-01 to 2026-08-03")
+    assert dt is not None and dt.day == 1
+    assert _parse_event_date("someday") == (None, False)
+
+
+def test_ics_generation():
+    from datetime import datetime
+    from briefer.calendar_ics import build_event_ics
+    ics = build_event_ics(title="A, b; c", start=datetime(2026, 8, 1, 14, 0),
+                          tz_name="Europe/Istanbul").decode()
+    assert ics.startswith("BEGIN:VCALENDAR")
+    assert ics.count("BEGIN:VALARM") == 3       # day-of + 2h + 1h
+    assert "TRIGGER:-PT2H" in ics and "TRIGGER:-PT1H" in ics
+    assert "SUMMARY:A\\, b\\; c" in ics          # RFC 5545 escaping
+    assert "DTSTART:20260801T110000Z" in ics     # 14:00 Istanbul -> 11:00 UTC
+
+
 def test_clamp():
     assert clamp("abc", 10) == "abc"
     assert "truncated" in clamp("a" * 100, 10)

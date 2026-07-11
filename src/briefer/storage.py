@@ -31,6 +31,12 @@ CREATE TABLE IF NOT EXISTS reminders (
     fired       INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS idx_reminders_fire ON reminders (fire_at, fired);
+CREATE TABLE IF NOT EXISTS allowed_chats (
+    chat_id     INTEGER PRIMARY KEY,
+    added_by    INTEGER,
+    added_at    REAL NOT NULL,
+    note        TEXT
+);
 """
 
 
@@ -81,6 +87,36 @@ class Store:
                 (fingerprint, kind, time.time()),
             )
             self._conn.commit()
+
+    # --- dynamic allow-list ------------------------------------------
+    def add_allowed(self, chat_id: int, added_by: int, note: str = "") -> None:
+        with self._lock:
+            self._conn.execute(
+                "INSERT OR REPLACE INTO allowed_chats(chat_id, added_by, added_at, note) "
+                "VALUES (?, ?, ?, ?)",
+                (chat_id, added_by, time.time(), note),
+            )
+            self._conn.commit()
+
+    def remove_allowed(self, chat_id: int) -> None:
+        with self._lock:
+            self._conn.execute(
+                "DELETE FROM allowed_chats WHERE chat_id = ?", (chat_id,))
+            self._conn.commit()
+
+    def list_allowed(self) -> list[dict[str, Any]]:
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT chat_id, added_by, added_at, note FROM allowed_chats "
+                "ORDER BY added_at").fetchall()
+        return [{"chat_id": r[0], "added_by": r[1], "added_at": r[2], "note": r[3]}
+                for r in rows]
+
+    def is_allowed(self, chat_id: int) -> bool:
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT 1 FROM allowed_chats WHERE chat_id = ?", (chat_id,)).fetchone()
+        return row is not None
 
     # --- reminders ---------------------------------------------------
     def add_reminder(self, chat_id: int, fire_at: float, title: str,

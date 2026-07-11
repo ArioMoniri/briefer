@@ -57,7 +57,8 @@ def main() -> int:
     enricher = Enricher(cfg.max_download_bytes)
     try:
         sheets = SheetsClient(
-            str(cfg.service_account_path), cfg.articles_sheet_id, cfg.events_sheet_id
+            cfg.google_auth_mode, str(cfg.service_account_path),
+            str(cfg.token_path), cfg.articles_sheet_id, cfg.events_sheet_id
         )
     except Exception as exc:  # noqa: BLE001
         log.error("Could not initialise Google Sheets: %s", exc)

@@ -60,6 +60,7 @@ class Config:
     # Telegram
     telegram_token: str
     allowed_chat_ids: set[int]
+    admin_chat_ids: set[int]
     login_password: str
     bootstrap: bool
 
@@ -69,7 +70,10 @@ class Config:
     verify_model: str
 
     # Google Sheets
+    google_auth_mode: str          # "service_account" | "oauth"
     service_account_file: str
+    oauth_client_file: str
+    token_file: str
     articles_sheet_id: str
     events_sheet_id: str
 
@@ -112,19 +116,43 @@ class Config:
                 "ALLOWED_CHAT_IDS is empty. Set BRIEFER_BOOTSTRAP=1 to run "
                 "in discovery mode and use /whoami to find your id."
             )
-        sa = self.service_account_path
-        if not sa.exists() and not self.bootstrap:
-            errors.append(
-                f"Google service-account file not found: {sa}. "
-                "Sheets features will fail without it."
-            )
+        if not self.bootstrap:
+            if self.google_auth_mode == "oauth":
+                if not self.token_path.exists():
+                    errors.append(
+                        f"OAuth token file not found: {self.token_path}. Run "
+                        "`./manage.sh google-auth` to log in with your Google "
+                        "account (it prints a link)."
+                    )
+            else:
+                if not self.service_account_path.exists():
+                    errors.append(
+                        f"Google service-account file not found: "
+                        f"{self.service_account_path}. Sheets will fail without it."
+                    )
         if errors:
             raise ConfigError("\n  - " + "\n  - ".join(errors))
 
     @property
-    def service_account_path(self) -> Path:
-        p = Path(self.service_account_file)
+    def admins(self) -> set[int]:
+        # If no explicit admins, the operator ids in ALLOWED_CHAT_IDS are admins.
+        return self.admin_chat_ids or self.allowed_chat_ids
+
+    def _resolve(self, value: str) -> Path:
+        p = Path(value)
         return p if p.is_absolute() else (self.project_root / p)
+
+    @property
+    def service_account_path(self) -> Path:
+        return self._resolve(self.service_account_file)
+
+    @property
+    def oauth_client_path(self) -> Path:
+        return self._resolve(self.oauth_client_file)
+
+    @property
+    def token_path(self) -> Path:
+        return self._resolve(self.token_file)
 
 
 def load_config() -> Config:
@@ -132,12 +160,16 @@ def load_config() -> Config:
         project_root=_PROJECT_ROOT,
         telegram_token=_get("TELEGRAM_BOT_TOKEN"),
         allowed_chat_ids=set(_get_int_list("ALLOWED_CHAT_IDS")),
+        admin_chat_ids=set(_get_int_list("ADMIN_CHAT_IDS")),
         login_password=_get("LOGIN_PASSWORD"),
         bootstrap=_get_bool("BRIEFER_BOOTSTRAP", False),
         anthropic_api_key=_get("ANTHROPIC_API_KEY"),
         model=_get("ANTHROPIC_MODEL", "claude-sonnet-5"),
         verify_model=_get("ANTHROPIC_VERIFY_MODEL", "claude-opus-4-8"),
+        google_auth_mode=_get("GOOGLE_AUTH_MODE", "service_account").lower(),
         service_account_file=_get("GOOGLE_SERVICE_ACCOUNT_FILE", "service_account.json"),
+        oauth_client_file=_get("GOOGLE_OAUTH_CLIENT_FILE", "client_secret.json"),
+        token_file=_get("GOOGLE_TOKEN_FILE", "token.json"),
         articles_sheet_id=_get("ARTICLES_SHEET_ID"),
         events_sheet_id=_get("EVENTS_SHEET_ID"),
         company_name=_get("COMPANY_NAME", "Vivax"),

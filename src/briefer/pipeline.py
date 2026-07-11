@@ -32,6 +32,8 @@ class Result:
     source: str
     duplicate: bool = False
     deadline_dt: Optional[datetime] = None
+    event_dt: Optional[datetime] = None
+    event_all_day: bool = False
 
 
 class Pipeline:
@@ -78,8 +80,10 @@ class Pipeline:
         self.store.mark_seen(fp, kind)
 
         deadline_dt = _parse_deadline(merged.get("application_deadline"))
+        event_dt, all_day = _parse_event_date(merged.get("event_date"))
         return Result(kind=kind, analysis=merged, source=source,
-                      deadline_dt=deadline_dt)
+                      deadline_dt=deadline_dt, event_dt=event_dt,
+                      event_all_day=all_day)
 
 
 def _source_label(content: EnrichedContent) -> str:
@@ -105,3 +109,37 @@ def _parse_deadline(value: Any) -> Optional[datetime]:
         except (ValueError, TypeError):
             continue
     return None
+
+
+def _parse_event_date(value: Any) -> tuple[Optional[datetime], bool]:
+    """Parse the event date, returning (datetime, is_all_day).
+
+    Handles single dates, datetimes, and ranges (takes the start). all_day is
+    True when only a date (no time) is present.
+    """
+    if not value or not isinstance(value, str):
+        return None, False
+    # Take the start of a range like "2026-08-01 to 2026-08-03" / "..—..".
+    first = value
+    for sep in (" to ", " – ", " — ", " - ", "–", "—", "/"):
+        if sep in value:
+            first = value.split(sep, 1)[0]
+            break
+    first = first.strip().replace("Z", "+00:00")
+    # Datetime first (has a time component).
+    for parser in (
+        lambda s: datetime.fromisoformat(s),
+        lambda s: datetime.strptime(s, "%Y-%m-%dT%H:%M"),
+    ):
+        try:
+            dt = parser(first)
+            if dt.hour or dt.minute or ("T" in first or ":" in first):
+                return dt, False
+            return dt, True
+        except (ValueError, TypeError):
+            continue
+    # Date only → all-day.
+    try:
+        return datetime.strptime(first, "%Y-%m-%d"), True
+    except (ValueError, TypeError):
+        return None, False

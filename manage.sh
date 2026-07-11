@@ -77,10 +77,14 @@ update() {
   restart
 }
 
+# google-auth = headless Google login (prints a link, no browser needed)
+google_auth() { PYTHONPATH="$APPDIR/src" "$PY" "$APPDIR/authorize_google.py"; }
+
 cmd="${1:-status}"
 case "$cmd" in
   start) start ;; stop) stop ;; restart) restart ;;
   refresh) refresh ;; reset) reset ;; status) status ;;
   logs) logs ;; foreground|fg) foreground ;; update) update ;;
-  *) echo "usage: $0 {start|stop|restart|refresh|reset|status|logs|foreground|update}"; exit 1 ;;
+  google-auth|gauth) google_auth ;;
+  *) echo "usage: $0 {start|stop|restart|refresh|reset|status|logs|foreground|update|google-auth}"; exit 1 ;;
 esac

@@ -85,7 +85,31 @@ See [`docs/SHEETS_SETUP.md`](docs/SHEETS_SETUP.md). In short:
 
 `/start` `/help` `/menu` · `/article <text>` `/event <text>` ·
 `/sheets` `/deadlines` `/status` · `/login <pw>` `/logout` `/whoami`
-`/cancel`. The `/help` guide opens automatically on `/start`.
+`/cancel`. Admins also get `/allow <chat_id>`, `/deny <chat_id>`,
+`/allowlist`. The `/help` guide opens automatically on `/start`.
+
+## Calendar (.ics) for events
+
+For every event, Briefer also sends a **`.ics` file** as a Telegram document.
+Open it on iPhone/Android and tap **Add to Calendar**. It embeds phone alarms
+for **the day of** the event and **2h + 1h before**, and comes with a
+**Google Calendar** button as a fallback. If there's no event date but there
+is an application deadline, you get an all-day deadline entry instead.
+
+## Adding people later
+
+Put your own id(s) in `ALLOWED_CHAT_IDS`/`ADMIN_CHAT_IDS` at setup. To add
+teammates afterwards, just send `/allow <their_chat_id>` from an admin chat —
+no restart, no file editing. They still need the shared `/login` password.
+Runtime additions persist in the local DB and appear in `/allowlist`.
+
+## Networking / firewall
+
+Briefer uses **outbound HTTPS on port 443 only** (Telegram, Anthropic,
+Google) plus DNS, and opens **no inbound port** (it long-polls, not webhooks).
+Fetched links are also restricted to ports 80/443. So a server that blocks
+odd ports (e.g. IMAP 993) is fine — nothing here needs them. Egress via an
+HTTP proxy is auto-detected and used.
 
 ---
 

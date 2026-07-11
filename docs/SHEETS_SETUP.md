@@ -1,7 +1,35 @@
 # Google Sheets setup
 
-Briefer writes to two spreadsheets via a **service account** (no OAuth
-browser flow, works headless on a server).
+Briefer supports **two** ways to reach Google Sheets. Pick one in the wizard
+(or via `GOOGLE_AUTH_MODE` in `.env`).
+
+## Option 1 — Log in with your Google account (OAuth) — recommended
+
+Sheets are created in **your own Drive** and you don't have to share anything.
+The server has no browser, so login uses a **link**:
+
+1. Google Cloud Console → **APIs & Services → Enable APIs** → enable **Google
+   Sheets API** and **Google Drive API**.
+2. **Credentials → Create credentials → OAuth client ID → Application type:
+   Desktop app**. Download the JSON and save it on the server as
+   `client_secret.json` (or set `GOOGLE_OAUTH_CLIENT_FILE`).
+   - If your Google project is in "Testing" mode, add your Google address as a
+     **Test user** on the OAuth consent screen.
+3. Run the headless login:
+   ```bash
+   ./manage.sh google-auth
+   ```
+   It prints a **link**. Open it on your phone/laptop, sign in, approve. Google
+   redirects to a `http://localhost/...` page that won't load — copy that
+   whole address-bar URL (or just the `code=...`) and paste it back. This
+   writes `token.json`; the bot auto-refreshes it forever.
+4. Set `GOOGLE_AUTH_MODE=oauth` in `.env` (the wizard does this) and
+   `./manage.sh restart`.
+
+To log in with a **different** Google account later, just re-run
+`./manage.sh google-auth`.
+
+## Option 2 — Service account (a robot Google identity)
 
 ## 1. Create a service account
 1. Go to <https://console.cloud.google.com/> → create/select a project.
