@@ -43,11 +43,11 @@ becomes the "Acme Robotics angle", reasoned against *your* focus.
 
 ```ini
 ANTHROPIC_API_KEY=sk-ant-...
-MODEL=claude-opus-4-8          # the main analyst
-VERIFY_MODEL=claude-haiku-4-5-20251001   # the cheaper fact-checker
+ANTHROPIC_MODEL=claude-opus-4-8               # the main analyst
+ANTHROPIC_VERIFY_MODEL=claude-haiku-4-5-20251001   # the cheaper fact-checker
 ```
 
-Use a smaller `MODEL` to cut cost, or the same model for both if you want the
+Use a smaller `ANTHROPIC_MODEL` to cut cost, or the same model for both if you want the
 strongest possible verification. The verifier re-checks dates, numbers and
 links against the source and flags anything it can't confirm.
 

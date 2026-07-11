@@ -24,6 +24,9 @@ one-command **server installer with a setup wizard**, **self-healing**
 (systemd auto-restart + cron watchdog + boot revival), and a security model
 designed so the bot can't be used to attack the server.
 
+> 📖 **New here?** The **[Complete Guide](docs/GUIDE.md)** covers every input
+> format, command, column and setting in one place.
+>
 > 🎨 **Not medical? Not Vivax?** Briefer isn't tied to any company — point it
 > at *your* focus with two env vars and it becomes your intake analyst. See
 > **[Make it your own](docs/CUSTOMIZE.md)**.
