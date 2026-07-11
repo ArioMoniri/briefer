@@ -269,35 +269,43 @@ class Enricher:
         content.urls = urls
 
         for url in urls:
-            if _LUMA_RE.match(url):
-                content.luma_urls.append(url)
-            # Tweets: extract the post + reply-parent + quoted/retweeted original,
-            # pull in photos for vision, and transcribe any attached video.
-            if self.tweets and TWEET_RE.match(url):
-                if self._handle_tweet(url, content):
-                    continue
-            gh = _GITHUB_RE.match(url)
-            if gh:
-                repo = self._github(gh.group(1), gh.group(2))
-                if repo:
-                    content.github_repos.append(repo)
-                    continue  # repo readme is richer than the html page
-            # Video links (YouTube/X/Vimeo/TikTok…): transcribe.
-            if self.transcriber and VIDEO_HOST_RE.match(url):
-                if self._handle_video(url, content):
-                    continue
-            resp = self._fetch(url)
-            if not resp:
-                content.notes.append(f"Could not fetch {url} (blocked or unreachable).")
-                continue
-            ctype = resp.headers.get("content-type", "")
-            if "application/pdf" in ctype:
-                content.link_texts[url] = _pdf_to_text(resp.content)
-            elif "text/html" in ctype or "text/plain" in ctype or not ctype:
-                content.link_texts[url] = self._extract_html_text(resp.text)
-            else:
-                content.notes.append(f"{url}: unsupported content-type {ctype}.")
+            try:
+                self._handle_url(url, content)
+            except Exception as exc:  # noqa: BLE001
+                # One problematic link must never sink the whole analysis.
+                log.warning("enrich failed for %s: %s", url, exc)
+                content.notes.append(f"Could not process {url}: {exc}")
         return content
+
+    def _handle_url(self, url: str, content: EnrichedContent) -> None:
+        if _LUMA_RE.match(url):
+            content.luma_urls.append(url)
+        # Tweets: extract the post + reply-parent + quoted/retweeted original,
+        # pull in photos for vision, and transcribe any attached video.
+        if self.tweets and TWEET_RE.match(url):
+            if self._handle_tweet(url, content):
+                return
+        gh = _GITHUB_RE.match(url)
+        if gh:
+            repo = self._github(gh.group(1), gh.group(2))
+            if repo:
+                content.github_repos.append(repo)
+                return  # repo readme is richer than the html page
+        # Video links (YouTube/X/Vimeo/TikTok…): transcribe.
+        if self.transcriber and VIDEO_HOST_RE.match(url):
+            if self._handle_video(url, content):
+                return
+        resp = self._fetch(url)
+        if not resp:
+            content.notes.append(f"Could not fetch {url} (blocked or unreachable).")
+            return
+        ctype = resp.headers.get("content-type", "")
+        if "application/pdf" in ctype:
+            content.link_texts[url] = _pdf_to_text(resp.content)
+        elif "text/html" in ctype or "text/plain" in ctype or not ctype:
+            content.link_texts[url] = self._extract_html_text(resp.text)
+        else:
+            content.notes.append(f"{url}: unsupported content-type {ctype}.")
 
 
 def _pdf_to_text(data: bytes) -> str:

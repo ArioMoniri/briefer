@@ -149,6 +149,9 @@ else
   case "${TR_IN:-Y}" in n|N) ENABLE_TR=0 ;; *) ENABLE_TR=1 ;; esac
   read -rp "Whisper model (tiny/base/small/medium) [base]: " WMODEL
   WMODEL="${WMODEL:-base}"
+  # Keep media features consistent: if you decline transcription, don't
+  # download videos for keyframes or run the image-gallery downloader either.
+  if [ "$ENABLE_TR" = "1" ]; then KF=4; GAL=1; else KF=0; GAL=0; fi
 
   BOOT=0; [ -z "${CHAT_IDS:-}" ] && BOOT=1
 
@@ -177,8 +180,8 @@ ENABLE_TRANSCRIPTION=${ENABLE_TR}
 WHISPER_MODEL=${WMODEL}
 TRANSCRIPTION_MAX_SECONDS=1800
 MEDIA_MAX_BYTES=50000000
-VIDEO_KEYFRAMES=4
-ENABLE_GALLERY_DL=1
+VIDEO_KEYFRAMES=${KF}
+ENABLE_GALLERY_DL=${GAL}
 COMPANY_NAME=Vivax
 COMPANY_URL=https://getvivax.com
 COMPANY_FOCUS=Medical AI, medical education, clinical simulation, and operating-room intelligence ("Reality Motors").

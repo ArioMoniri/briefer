@@ -80,6 +80,13 @@ logs() {
   touch "$LOGFILE"; tail -f "$LOGFILE"
 }
 
+# recent errors/warnings (all history), not a follow
+errors() {
+  touch "$LOGFILE"
+  grep -E "ERROR|WARNING|CRITICAL|Traceback|Exception" "$LOGFILE" | tail -n 60 \
+    || echo "no errors logged"
+}
+
 attach() {
   if tmux_running; then tmux attach -t "$TMUX_SESSION";
   else echo "no tmux session — use ./manage.sh logs"; fi
@@ -100,7 +107,7 @@ cmd="${1:-status}"
 case "$cmd" in
   start) start ;; stop) stop ;; restart) restart ;;
   refresh) refresh ;; reset) reset ;; status) status ;;
-  logs) logs ;; attach) attach ;; foreground|fg) foreground ;; update) update ;;
+  logs) logs ;; errors) errors ;; attach) attach ;; foreground|fg) foreground ;; update) update ;;
   google-auth|gauth) google_auth ;;
-  *) echo "usage: $0 {start|stop|restart|refresh|reset|status|logs|attach|foreground|update|google-auth}"; exit 1 ;;
+  *) echo "usage: $0 {start|stop|restart|refresh|reset|status|logs|errors|attach|foreground|update|google-auth}"; exit 1 ;;
 esac

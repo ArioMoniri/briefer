@@ -154,6 +154,22 @@ def test_video_handler_adds_caption_and_keyframes():
     assert sum(1 for a in c.attachments if a.kind == "image") == 2
 
 
+def test_enrich_survives_bad_url():
+    from briefer.enrich import Enricher
+    e = Enricher(15_000_000)
+    e._handle_url = lambda url, content: (_ for _ in ()).throw(RuntimeError("boom"))
+    c = e.enrich("visit https://example.com/x", [])
+    # No exception propagated; the failure is recorded as a note.
+    assert any("boom" in n for n in c.notes)
+
+
+def test_bot_commands_cover_key_commands():
+    from briefer.telegram_bot import BOT_COMMANDS
+    names = {c for c, _ in BOT_COMMANDS}
+    for required in ("start", "help", "login", "sheets", "status", "logs"):
+        assert required in names
+
+
 def test_guess_media_type():
     from briefer.media import guess_media_type
     assert guess_media_type(b"\xff\xd8\xff\xe0xx") == "image/jpeg"

@@ -207,15 +207,56 @@ class BrieferBot:
         if not await self._require_auth(update):
             return
         up = _uptime(ctx)
+        a = self.pipeline.sheets.articles_id
+        e = self.pipeline.sheets.events_id
+        media = "on" if self.cfg.enable_transcription else "off"
         await self._reply(
             update,
             "💚 *Status*\n"
             f"Uptime: {up}\n"
             f"Model: `{self.cfg.model}` / verify `{self.cfg.verify_model}`\n"
-            f"Articles sheet: {'set' if self.cfg.articles_sheet_id else 'auto'}\n"
-            f"Events sheet: {'set' if self.cfg.events_sheet_id else 'auto'}\n"
-            f"Reminder lead times: {self.cfg.deadline_reminder_hours} h",
+            f"Transcription: {media} · keyframes: {self.cfg.video_keyframes}\n"
+            f"Reminder lead times: {self.cfg.deadline_reminder_hours} h\n"
+            f"📄 Articles: https://docs.google.com/spreadsheets/d/{a}\n"
+            f"📅 Events: https://docs.google.com/spreadsheets/d/{e}",
+            preview=True,
         )
+
+    async def cmd_logs(self, update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+        """Admin: show recent log lines. `/logs` = last 30, `/logs errors`
+        = recent errors/warnings, `/logs 60` = last 60 lines."""
+        if not await self._require_admin(update):
+            return
+        logfile = self.cfg.data_dir / "logs" / "briefer.log"
+        if not logfile.exists():
+            await self._reply(update, "No log file yet.")
+            return
+        arg = (ctx.args[0].lower() if ctx.args else "")
+        try:
+            lines = logfile.read_text("utf-8", "replace").splitlines()
+        except Exception as exc:  # noqa: BLE001
+            await self._reply(update, f"Could not read log: {exc}")
+            return
+        if arg in ("errors", "error", "err"):
+            picked = [ln for ln in lines
+                      if any(k in ln for k in ("ERROR", "WARNING", "CRITICAL",
+                                               "Traceback", "Exception"))][-30:]
+            header = "🪵 <b>Recent errors/warnings</b>"
+        else:
+            n = 30
+            if arg.isdigit():
+                n = max(1, min(200, int(arg)))
+            picked = lines[-n:]
+            header = f"🪵 <b>Last {len(picked)} log lines</b>"
+        last_err = ctx.application.bot_data.get("last_error")
+        body = "\n".join(picked) or "(empty)"
+        # Telegram messages cap ~4096 chars; keep the tail.
+        body = body[-3500:]
+        msg = header
+        if last_err:
+            msg += f"\nLast analysis error: <code>{html.escape(str(last_err)[:200])}</code>"
+        msg += f"\n<pre>{html.escape(body)}</pre>"
+        await self._reply(update, msg, parse_mode=ParseMode.HTML)
 
     async def cmd_sheets(self, update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         if not await self._require_auth(update):
@@ -380,9 +421,16 @@ class BrieferBot:
             result: Result = await asyncio.to_thread(
                 self.pipeline.process, text, attachments, submitter, force_kind
             )
-        except Exception:  # noqa: BLE001
+        except Exception as exc:  # noqa: BLE001
             log.exception("pipeline failure")
-            await note.edit_text("⚠️ Something went wrong while analysing. It's logged.")
+            # Surface the real reason to the (already-authenticated) user, and
+            # keep it for /logs. Truncated so we never dump a huge traceback.
+            reason = f"{type(exc).__name__}: {exc}"
+            ctx.application.bot_data["last_error"] = reason
+            await note.edit_text(
+                "⚠️ Analysis failed.\n<code>" + html.escape(reason[:350])
+                + "</code>\nSee <b>/logs</b> for detail.",
+                parse_mode=ParseMode.HTML)
             return
 
         if result.duplicate:
@@ -647,8 +695,39 @@ def _format_catch(result: Result) -> str:
     return "\n\n".join(parts)
 
 
+BOT_COMMANDS = [
+    ("start", "Welcome & menu"),
+    ("help", "Full guide"),
+    ("menu", "Quick action buttons"),
+    ("article", "File the next item as an article"),
+    ("event", "File the next item as an event"),
+    ("sheets", "Links to your two Google Sheets"),
+    ("deadlines", "Upcoming event deadlines"),
+    ("status", "Bot health & sheet links"),
+    ("logs", "Recent logs (admin)"),
+    ("allow", "Allow a chat id (admin)"),
+    ("deny", "Remove a chat id (admin)"),
+    ("allowlist", "Show allowed chats (admin)"),
+    ("login", "Authenticate this chat"),
+    ("logout", "End this chat's session"),
+    ("whoami", "Show your chat id"),
+    ("cancel", "Cancel the current action"),
+]
+
+
+async def _post_init(app: Application) -> None:
+    # Registers the command list so typing "/" in Telegram pops up the menu.
+    from telegram import BotCommand
+
+    try:
+        await app.bot.set_my_commands([BotCommand(c, d) for c, d in BOT_COMMANDS])
+    except Exception:  # noqa: BLE001
+        log.warning("set_my_commands failed", exc_info=True)
+
+
 def build_application(cfg: Config, bot: BrieferBot) -> Application:
-    app = Application.builder().token(cfg.telegram_token).build()
+    app = (Application.builder().token(cfg.telegram_token)
+           .post_init(_post_init).build())
     app.bot_data["started_at"] = time.time()
 
     app.add_handler(CommandHandler("start", bot.cmd_start))
@@ -661,6 +740,7 @@ def build_application(cfg: Config, bot: BrieferBot) -> Application:
     app.add_handler(CommandHandler("deny", bot.cmd_deny))
     app.add_handler(CommandHandler("allowlist", bot.cmd_allowlist))
     app.add_handler(CommandHandler("status", bot.cmd_status))
+    app.add_handler(CommandHandler("logs", bot.cmd_logs))
     app.add_handler(CommandHandler("sheets", bot.cmd_sheets))
     app.add_handler(CommandHandler("deadlines", bot.cmd_deadlines))
     app.add_handler(CommandHandler("cancel", bot.cmd_cancel))
