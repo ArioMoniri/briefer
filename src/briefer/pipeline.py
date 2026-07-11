@@ -59,6 +59,9 @@ class Pipeline:
     def process(self, text: str, attachments: list[Attachment],
                 submitted_by: str, force_kind: str | None = None,
                 chat_id: int = 0) -> Result:
+        # A "note: …" description is filed into the Notes column, not analysed.
+        from .reminders import extract_note
+        note, text = extract_note(text)
         content = self.enricher.enrich(text, attachments)
         fp = self._fingerprint(content)
 
@@ -143,6 +146,8 @@ class Pipeline:
                                                 source, submitted_by, images)
                 self.store.update_entry_analysis(existing["id"], merged,
                                                  str(merged.get("title", "")))
+                if note:
+                    self.sheets.write_note(existing["sheet"], row, note)
                 dl = _parse_deadline(merged.get("application_deadline"))
                 ev, all_day = _parse_event_date(merged.get("event_date"))
                 return Result(kind=existing["sheet"], analysis=merged,
@@ -164,6 +169,8 @@ class Pipeline:
                                              entry_id, status)
         self.store.add_entry(entry_id, chat_id, kind, fp,
                              str(fresh.get("title", "")), fresh, dedup_key)
+        if note:
+            self.sheets.write_note(kind, row, note)
         return Result(kind=kind, analysis=fresh, source=source,
                       deadline_dt=deadline_dt, event_dt=event_dt,
                       event_all_day=all_day, sheet_row=row, entry_id=entry_id)

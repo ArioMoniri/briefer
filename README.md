@@ -175,6 +175,24 @@ the existing row** (unioning catch-points, tags, criteria, etc.) instead of
 just saying "already added". If nothing new is found, it says so and leaves
 the row untouched.
 
+## Notes, tags & assigning rows to people
+
+- 📝 **Add a description** — put a line `note: <text>` in the message or a
+  file/photo **caption**. It's filed into the row's **Notes** column (not
+  analysed) and accumulates across re-sends.
+- 🏷 **Tags dropdown** — the **My Tags** column shows a dropdown of every tag
+  already in use; pick one or type a new one.
+- 👥 **Assign a row to a teammate** — map people once with
+  `/name <chat_id> <name>` (see `/people`), then pick a name from the
+  **Assignee** column's dropdown (free text like *"pass it to John"* also
+  works). That person gets a Telegram ping with **👀 Seen** / **✅ Mark
+  checked** buttons; the **Assignee Done** checkbox is theirs and the **Seen**
+  column records when they acknowledged. *(Telegram has no read-receipts, so
+  "Seen" means they tapped 👀.)*
+- ♻️ A **cumulative re-send refreshes the analysed data columns** (so stale
+  manual edits there are replaced), while your **Notes / My Tags / Assignee**
+  are preserved.
+
 ## Files it reads
 
 PDF, **Word (.docx)**, **PowerPoint (.pptx)**, **Excel (.xlsx)**, and plain

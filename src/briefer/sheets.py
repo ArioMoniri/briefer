@@ -507,6 +507,48 @@ class SheetsClient:
         except Exception as exc:  # noqa: BLE001
             log.warning("archive_entry failed: %s", exc)
 
+    def write_note(self, sheet: str, rownum: int, note: str) -> None:
+        """Append a `note: …` description to the row's Notes cell (accumulates
+        across submissions; never clobbers what's already there)."""
+        if not note:
+            return
+        ws = self.worksheet(sheet)
+        headers = EVENT_HEADERS if sheet == "event" else ARTICLE_HEADERS
+        col = _control_cols(headers)["notes"]
+        a1 = f"{_col_letter(col)}{rownum}"
+        try:
+            existing = (ws.acell(a1).value or "").strip()
+        except Exception:  # noqa: BLE001
+            existing = ""
+        if note.strip() in existing:
+            return  # already recorded this note
+        merged = f"{existing}\n{note}".strip() if existing else note
+        try:
+            ws.update([[merged]], a1, value_input_option="RAW")
+        except Exception as exc:  # noqa: BLE001
+            log.warning("write_note failed: %s", exc)
+
+    def set_tags_dropdown(self, names: list[str]) -> None:
+        """Show a dropdown of all tags used so far on the My Tags column, so you
+        can pick an existing tag or type a new one (strict=False)."""
+        for sheet in ("article", "event"):
+            try:
+                ws = self.worksheet(sheet)
+                headers = EVENT_HEADERS if sheet == "event" else ARTICLE_HEADERS
+                col = _control_cols(headers)["tags"]
+                rng = {"sheetId": ws.id, "startRowIndex": 1, "endRowIndex": 50000,
+                       "startColumnIndex": col - 1, "endColumnIndex": col}
+                if names:
+                    rule = {"setDataValidation": {"range": rng, "rule": {
+                        "condition": {"type": "ONE_OF_LIST",
+                                      "values": [{"userEnteredValue": n} for n in names[:500]]},
+                        "showCustomUi": True, "strict": False}}}
+                else:
+                    rule = {"setDataValidation": {"range": rng}}
+                ws.spreadsheet.batch_update({"requests": [rule]})
+            except Exception as exc:  # noqa: BLE001
+                log.warning("tags dropdown (%s) failed: %s", sheet, exc)
+
     def write_status(self, sheet: str, rownum: int, tag: str) -> None:
         ws = self.worksheet(sheet)
         headers = EVENT_HEADERS if sheet == "event" else ARTICLE_HEADERS

@@ -38,6 +38,25 @@ def extract_directive(text: str) -> tuple[Optional[str], str]:
     return when, note
 
 
+# A description to file into the Notes column: a line starting with
+# note:/notes:/desc:/description: — everything after it is the note.
+_NOTE_RE = re.compile(
+    r"(?:^|\n)\s*(?:note|notes|desc|description)\b\s*[:\-]\s*(.+)$",
+    re.IGNORECASE | re.DOTALL,
+)
+
+
+def extract_note(text: str) -> tuple[Optional[str], str]:
+    """Return (note, text_without_note). Pulls a `note: …` description out of a
+    submission so it goes to the Notes column instead of being analysed."""
+    if not text:
+        return None, text or ""
+    m = _NOTE_RE.search(text)
+    if not m:
+        return None, text
+    return m.group(1).strip(), text[: m.start()].strip()
+
+
 def parse_when(text: str, tz: str) -> Optional[datetime]:
     """Parse a natural-language or ISO time into a tz-aware future datetime."""
     if not text:

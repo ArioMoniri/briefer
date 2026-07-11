@@ -7,6 +7,10 @@ date-stamped entries rather than semantic version tags.
 ## [Unreleased]
 
 ### Added
+- 📝 **`note:` descriptions** — a `note: …` line in a message/caption is filed
+  into the row's **Notes** column (not analysed) and accumulates across re-sends.
+- 🏷 **Tags dropdown** — the **My Tags** column offers a dropdown of every tag
+  already in use (pick or type a new one), refreshed as tags change.
 - 👥 **Row assignments** — a **People directory** (`/people`, `/name <id>
   <name>`, `/unname <id>`) maps names to chat ids. Type a name in a row's new
   **Assignee** column (dropdown of your people; free text like "pass it to

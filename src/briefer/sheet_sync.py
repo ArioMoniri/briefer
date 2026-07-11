@@ -74,7 +74,28 @@ class SheetSync:
                     sheet, stats_rows(name, rich_stats(self.store, sheet)))
             except Exception:  # noqa: BLE001
                 log.exception("sync failed for %s sheet", sheet)
+        self._refresh_tags_dropdown()
         return notify
+
+    def _refresh_tags_dropdown(self) -> None:
+        """Keep the My Tags dropdown populated with every tag in use, but only
+        push to Sheets when the set actually changed (idempotent, cheap)."""
+        tags: set[str] = set()
+        for sheet in ("article", "event"):
+            for e in self.store.active_entries(sheet):
+                for t in (e.get("analysis") or {}).get("tags") or []:
+                    t = str(t).strip()
+                    if t:
+                        tags.add(t)
+        names = sorted(tags, key=str.lower)
+        sig = "|".join(names)
+        if self.store.get_meta("tags_dropdown_sig", "") == sig:
+            return
+        try:
+            self.sheets.set_tags_dropdown(names)
+            self.store.set_meta("tags_dropdown_sig", sig)
+        except Exception:  # noqa: BLE001
+            log.warning("tags dropdown refresh failed")
 
     def _resolve_assignee(self, raw: str) -> dict | None:
         """Turn an Assignee cell ('John' or 'pass it to John') into a person."""

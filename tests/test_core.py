@@ -231,6 +231,14 @@ def test_merge_dedups_reworded_bullets_and_keeps_good_scalars():
     assert again["catch_points"] == merged["catch_points"] and changed2 is False
 
 
+def test_extract_note_directive():
+    from briefer.reminders import extract_note
+    assert extract_note("https://x.com/a\nnote: call the CFO") == (
+        "call the CFO", "https://x.com/a")
+    assert extract_note("description: Q3 deck") == ("Q3 deck", "")
+    assert extract_note("just a link, no note") == (None, "just a link, no note")
+
+
 def test_people_directory_and_assignment_flow():
     """Map a name → assign a row by typing the name → the assignee is resolved
     and a notification is queued; ticking Assignee Done records it."""
