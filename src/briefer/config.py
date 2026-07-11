@@ -84,6 +84,8 @@ class Config:
 
     # Media (tweets / video)
     twitter_bearer_token: str
+    twitter_consumer_key: str
+    twitter_consumer_secret: str
     enable_transcription: bool
     whisper_model: str
     transcription_max_seconds: int
@@ -180,6 +182,8 @@ def load_config() -> Config:
         articles_sheet_id=_get("ARTICLES_SHEET_ID"),
         events_sheet_id=_get("EVENTS_SHEET_ID"),
         twitter_bearer_token=_get("TWITTER_BEARER_TOKEN"),
+        twitter_consumer_key=_get("TWITTER_CONSUMER_KEY"),
+        twitter_consumer_secret=_get("TWITTER_CONSUMER_SECRET"),
         enable_transcription=_get_bool("ENABLE_TRANSCRIPTION", True),
         whisper_model=_get("WHISPER_MODEL", "base"),
         transcription_max_seconds=_get_int("TRANSCRIPTION_MAX_SECONDS", 1800),

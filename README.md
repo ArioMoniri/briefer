@@ -109,8 +109,16 @@ Runtime additions persist in the local DB and appear in `/allowlist`.
 - **Tweets / X posts**: send a status link and Briefer extracts the post text,
   the tweet it's **replying to**, any **quoted** or **retweeted** original
   (with its text), and attached **photos** (read via vision) and **videos**
-  (transcribed). Set `TWITTER_BEARER_TOKEN` for the reliable official API;
-  otherwise it uses a no-auth best-effort scraper.
+  (transcribed). Reads tweets **without any keys** via a no-auth fallback; for
+  the official API set `TWITTER_BEARER_TOKEN`, or just
+  `TWITTER_CONSUMER_KEY` + `TWITTER_CONSUMER_SECRET` (Briefer mints the bearer).
+  Note: X's *Free* tier can't read tweets (paid Basic+ required) — the no-auth
+  fallback covers reading either way.
+- **Instagram / LinkedIn / Facebook**: no public read API exists for arbitrary
+  posts. Briefer transcribes many **public IG reels / FB / LinkedIn videos**
+  via yt-dlp, but for post *text* the reliable route on any platform is to send
+  a **screenshot** (read via vision) or **paste the text** — that works
+  everywhere and needs no credentials.
 - **Videos & audio**: uploaded video/voice notes, and YouTube/Vimeo/TikTok/X
   video links, are **transcribed** — YouTube uses captions when available,
   otherwise a local **Whisper** model (`faster-whisper`, CPU) does the

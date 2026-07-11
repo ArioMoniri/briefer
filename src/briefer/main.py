@@ -56,7 +56,8 @@ def main() -> int:
 
     store = Store(cfg.db_path)
     llm = LLM(cfg.anthropic_api_key, cfg.model, cfg.verify_model)
-    tweets = TweetExtractor(cfg.twitter_bearer_token)
+    tweets = TweetExtractor(cfg.twitter_bearer_token, cfg.twitter_consumer_key,
+                            cfg.twitter_consumer_secret)
     transcriber = VideoTranscriber(
         cfg.enable_transcription, cfg.whisper_model,
         cfg.transcription_max_seconds, cfg.media_max_bytes)

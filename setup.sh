@@ -135,7 +135,14 @@ else
 
   echo
   say "Media parsing (tweets + video/audio transcription):"
-  read -rp "X/Twitter API bearer token (optional, blank = no-auth best-effort): " XTOKEN
+  echo "  X/Twitter is OPTIONAL — tweets are read without keys via a fallback."
+  echo "  Keys only help on a PAID X tier (Free can't read tweets)."
+  read -rp "X bearer token (blank to use consumer key/secret or the fallback): " XTOKEN
+  XCKEY=""; XCSECRET=""
+  if [ -z "${XTOKEN:-}" ]; then
+    read -rp "X consumer key / API Key (optional): " XCKEY
+    read -rp "X consumer secret / API Key Secret (optional): " XCSECRET
+  fi
   read -rp "Transcribe videos/audio with local Whisper? [Y/n]: " TR_IN
   case "${TR_IN:-Y}" in n|N) ENABLE_TR=0 ;; *) ENABLE_TR=1 ;; esac
   read -rp "Whisper model (tiny/base/small/medium) [base]: " WMODEL
@@ -162,6 +169,8 @@ GOOGLE_TOKEN_FILE=token.json
 ARTICLES_SHEET_ID=${ART_ID}
 EVENTS_SHEET_ID=${EVT_ID}
 TWITTER_BEARER_TOKEN=${XTOKEN}
+TWITTER_CONSUMER_KEY=${XCKEY}
+TWITTER_CONSUMER_SECRET=${XCSECRET}
 ENABLE_TRANSCRIPTION=${ENABLE_TR}
 WHISPER_MODEL=${WMODEL}
 TRANSCRIPTION_MAX_SECONDS=1800

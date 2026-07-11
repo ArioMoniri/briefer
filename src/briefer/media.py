@@ -36,6 +36,9 @@ VIDEO_HOST_RE = re.compile(
     r"https?://(?:www\.)?("
     r"youtube\.com/watch|youtu\.be/|youtube\.com/shorts/|"
     r"vimeo\.com/|tiktok\.com/|dailymotion\.com/|"
+    r"instagram\.com/(?:reel|p|tv)/|"
+    r"facebook\.com/\S+/videos/|fb\.watch/|"
+    r"linkedin\.com/(?:posts|feed/update)/|"
     r"twitter\.com/\S+/status/|x\.com/\S+/status/)",
     re.IGNORECASE,
 )
@@ -74,21 +77,51 @@ class TweetData:
 # ---------------------------------------------------------------------------
 
 class TweetExtractor:
-    def __init__(self, bearer_token: str = "") -> None:
+    def __init__(self, bearer_token: str = "", consumer_key: str = "",
+                 consumer_secret: str = "") -> None:
         self.bearer = bearer_token.strip()
+        self.consumer_key = consumer_key.strip()
+        self.consumer_secret = consumer_secret.strip()
+        self._bearer_tried = False
+
+    def _ensure_bearer(self) -> str:
+        """Return a bearer token, minting one from the consumer key/secret
+        (OAuth2 app-only client-credentials grant) if we weren't given one."""
+        if self.bearer or self._bearer_tried:
+            return self.bearer
+        self._bearer_tried = True
+        if not (self.consumer_key and self.consumer_secret):
+            return ""
+        try:
+            with httpx.Client(timeout=15) as c:
+                r = c.post(
+                    "https://api.twitter.com/oauth2/token",
+                    auth=(self.consumer_key, self.consumer_secret),
+                    data={"grant_type": "client_credentials"},
+                    headers={"Content-Type":
+                             "application/x-www-form-urlencoded;charset=UTF-8"},
+                )
+            r.raise_for_status()
+            self.bearer = r.json().get("access_token", "")
+            if self.bearer:
+                log.info("Minted X bearer token from consumer key/secret.")
+        except Exception as exc:  # noqa: BLE001
+            log.warning("Could not mint X bearer from consumer key/secret: %s", exc)
+        return self.bearer
 
     def extract(self, url: str) -> TweetData | None:
         m = TWEET_RE.match(url)
         if not m:
             return None
         tweet_id = m.group(2)
-        if self.bearer:
+        if self._ensure_bearer():
             try:
                 data = self._via_api(tweet_id, url)
                 if data:
                     return data
             except Exception as exc:  # noqa: BLE001
-                log.warning("X API failed (%s); falling back", exc)
+                # e.g. 403 on the Free tier (no read access) → fall back.
+                log.warning("X API failed (%s); falling back to no-auth", exc)
         return self._via_syndication(tweet_id, url) or self._via_oembed(url)
 
     # --- official API v2 ---
