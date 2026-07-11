@@ -29,7 +29,7 @@ Every requirement from the original brief, and where it lives.
 | 23 | **Cumulative append** of every new item | ✅ | append-only sheets (`sheets.py`) |
 | 24 | Event **`.ics` calendar files** sent in Telegram, addable on Apple/Android | ✅ | `calendar_ics.py`, sent as a document + Google Calendar button |
 | 25 | ICS **alarms**: day-of, 2h and 1h before the event | ✅ | 3 VALARMs per event (`build_event_ics`) |
-| 26 | Parse **videos** (uploads + YouTube/X/Vimeo/TikTok) | ✅ | `media.VideoTranscriber` (captions → local Whisper), `ffmpeg` via setup.sh |
+| 26 | Parse **videos** (uploads + YouTube/X/Vimeo/TikTok) | ✅ | `media.VideoTranscriber` (captions → local Whisper); ffmpeg via pip `imageio-ffmpeg` (in venv) |
 | 27 | Parse **tweets**: the post, **replied-to**, **reposted/retweeted** + repost text, **quoted original**, media | ✅ | `media.TweetExtractor` (X API v2 or no-auth syndication/oEmbed) |
 | 28 | Parse **voice/audio** messages | ✅ | transcribed via `make_media_attachment` + Whisper |
 

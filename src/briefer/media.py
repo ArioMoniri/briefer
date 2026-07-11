@@ -292,6 +292,20 @@ def _parse_syndication(j: dict[str, Any], url: str) -> TweetData:
 _WHISPER = None  # lazy singleton
 
 
+def _ffmpeg_exe() -> str | None:
+    """Path to an ffmpeg binary. Prefers the pip-bundled one (imageio-ffmpeg),
+    which lives inside the venv, so no system `apt install ffmpeg` is needed.
+    Falls back to a system ffmpeg if present."""
+    try:
+        import imageio_ffmpeg
+
+        return imageio_ffmpeg.get_ffmpeg_exe()
+    except Exception:  # noqa: BLE001
+        import shutil
+
+        return shutil.which("ffmpeg")
+
+
 def _get_whisper(model_name: str):
     global _WHISPER
     if _WHISPER is None:
@@ -342,6 +356,11 @@ class VideoTranscriber:
         if not ok:
             out["note"] = f"refused unsafe URL: {reason}"
             return out
+        # If the media pack is off (no transcription, no keyframes), don't
+        # touch yt-dlp at all — just note it and bail.
+        if not self.enabled and self.keyframes <= 0:
+            out["note"] = "media features disabled (run ./manage.sh enable-media)"
+            return out
         # 1) captions via youtube-transcript-api (YouTube only, cheap)
         yt = _youtube_id(url)
         if yt:
@@ -379,6 +398,9 @@ class VideoTranscriber:
                 "socket_timeout": 20,
                 "retries": 2,
             }
+            ff = _ffmpeg_exe()
+            if ff:
+                opts["ffmpeg_location"] = ff
             with yt_dlp.YoutubeDL(opts) as ydl:
                 info = ydl.extract_info(url, download=need_media)
             out["title"] = info.get("title", "") or out["title"]
@@ -415,17 +437,17 @@ def _extract_keyframes(path: str, n: int, duration: float | None) -> list[bytes]
     vision-model token cost modest.
     """
     import os
-    import shutil
     import subprocess
 
-    if n <= 0 or not shutil.which("ffmpeg"):
+    ffmpeg = _ffmpeg_exe()
+    if n <= 0 or not ffmpeg:
         return []
     frames: list[bytes] = []
     dur = duration or 0
     for i in range(n):
         ts = (dur * (i + 0.5) / n) if dur else i * 3.0
         out_path = str(Path(tempfile.gettempdir()) / f"bf_{os.getpid()}_{i}.jpg")
-        cmd = ["ffmpeg", "-nostdin", "-loglevel", "error", "-ss", f"{ts:.2f}",
+        cmd = [ffmpeg, "-nostdin", "-loglevel", "error", "-ss", f"{ts:.2f}",
                "-i", path, "-frames:v", "1", "-q:v", "5",
                "-vf", "scale=768:-2", "-y", out_path]
         try:

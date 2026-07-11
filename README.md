@@ -126,7 +126,9 @@ Runtime additions persist in the local DB and appear in `/allowlist`.
   grabs a few **keyframes** that are sent to the Anthropic **multimodal**
   model — so it *watches* the video (visuals) as well as *reads* it (audio +
   caption). Controlled by `ENABLE_TRANSCRIPTION`, `WHISPER_MODEL`,
-  `VIDEO_KEYFRAMES`. Needs `ffmpeg` (installed by `setup.sh`).
+  `VIDEO_KEYFRAMES`. **ffmpeg and Whisper are pip-installed inside the venv**
+  (`imageio-ffmpeg` / `faster-whisper`) — no system packages. Set
+  `ENABLE_TRANSCRIPTION=0` to skip it on tiny servers.
 - **Image posts**: for photo posts yt-dlp can't handle (e.g. Instagram
   photos, Pinterest, galleries), a **gallery-dl** fallback downloads the
   images and feeds them to the vision model (`ENABLE_GALLERY_DL`). Public

@@ -57,12 +57,14 @@ install_pkgs() {
   [ -n "$pm" ] || { warn "No known package manager; ensure python3, venv, pip, git are installed."; return; }
   say "Installing system dependencies via $pm…"
   local SUDO=""; [ "$IS_ROOT" -eq 0 ] && command -v sudo >/dev/null && SUDO="sudo"
+  # Lightweight core only. ffmpeg (for video transcription) is installed
+  # on demand by `./manage.sh enable-media`, not here.
   case "$pm" in
-    apt-get) $SUDO apt-get update -y && $SUDO apt-get install -y python3 python3-venv python3-pip git curl ca-certificates ffmpeg ;;
-    dnf|yum) $SUDO "$pm" install -y python3 python3-pip git curl ca-certificates ffmpeg ;;
-    apk)     $SUDO apk add --no-cache python3 py3-pip git curl ca-certificates ffmpeg ;;
-    pacman)  $SUDO pacman -Sy --noconfirm python python-pip git curl ca-certificates ffmpeg ;;
-    zypper)  $SUDO zypper install -y python3 python3-pip git curl ca-certificates ffmpeg ;;
+    apt-get) $SUDO apt-get update -y && $SUDO apt-get install -y python3 python3-venv python3-pip git curl ca-certificates tmux ;;
+    dnf|yum) $SUDO "$pm" install -y python3 python3-pip git curl ca-certificates tmux ;;
+    apk)     $SUDO apk add --no-cache python3 py3-pip git curl ca-certificates tmux ;;
+    pacman)  $SUDO pacman -Sy --noconfirm python python-pip git curl ca-certificates tmux ;;
+    zypper)  $SUDO zypper install -y python3 python3-pip git curl ca-certificates tmux ;;
   esac
   ok "System dependencies ready"
 }
@@ -134,15 +136,15 @@ else
   TZ_IN="${TZ_IN:-Europe/Istanbul}"
 
   echo
-  say "Media parsing (tweets + video/audio transcription):"
-  echo "  X/Twitter is OPTIONAL — tweets are read without keys via a fallback."
-  echo "  Keys only help on a PAID X tier (Free can't read tweets)."
+  say "Tweets/X (OPTIONAL — tweets are read without keys via a fallback;"
+  say "keys only help on a PAID X tier)."
   read -rp "X bearer token (blank to use consumer key/secret or the fallback): " XTOKEN
   XCKEY=""; XCSECRET=""
   if [ -z "${XTOKEN:-}" ]; then
     read -rp "X consumer key / API Key (optional): " XCKEY
     read -rp "X consumer secret / API Key Secret (optional): " XCSECRET
   fi
+  # Video/audio transcription (ffmpeg + Whisper are pip-installed into the venv).
   read -rp "Transcribe videos/audio with local Whisper? [Y/n]: " TR_IN
   case "${TR_IN:-Y}" in n|N) ENABLE_TR=0 ;; *) ENABLE_TR=1 ;; esac
   read -rp "Whisper model (tiny/base/small/medium) [base]: " WMODEL

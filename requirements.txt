@@ -1,6 +1,8 @@
-# Briefer — Telegram intake & analysis bot
-# Pinned to major versions; setup.sh installs these into a virtualenv.
+# Briefer — all dependencies, installed into the project virtualenv (.venv)
+# by setup.sh. Everything is pip-managed and lives inside the venv so it's
+# self-contained and trackable — no system-wide packages, no apt ffmpeg.
 
+# Core
 python-telegram-bot[job-queue]==21.6
 anthropic==0.39.0
 gspread==6.1.2
@@ -11,14 +13,14 @@ beautifulsoup4==4.12.3
 pypdf==5.0.1
 python-dotenv==1.0.1
 tenacity==9.0.0
-pillow==11.0.0
 
-# Rich media: X/Twitter + video transcription
+# Media: X/Twitter, video/audio transcription, image galleries.
 yt-dlp==2024.12.13
 youtube-transcript-api==0.6.2
-# Local speech-to-text (CPU, int8). Heavy-ish; downloads a model on first
-# use. Disable with ENABLE_TRANSCRIPTION=0 if you don't need video/audio.
+# Local speech-to-text (CPU, int8). Downloads a small model on first use.
 faster-whisper==1.0.3
-# Fallback downloader for image-based social posts (Instagram photos,
-# Pinterest, galleries…). Disable with ENABLE_GALLERY_DL=0.
+# Fallback downloader for image posts (Instagram photos, Pinterest, galleries).
 gallery-dl==1.27.7
+# ffmpeg binary shipped as a pip wheel → stays inside the venv, so we don't
+# need the 480 MB system `apt install ffmpeg`. Used for video keyframes.
+imageio-ffmpeg==0.5.1
