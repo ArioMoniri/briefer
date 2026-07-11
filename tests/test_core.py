@@ -326,6 +326,38 @@ def test_link_safety_gate():
     assert not v2.safe and not v2.fetch
 
 
+def test_reminder_directive_and_parse():
+    from briefer.reminders import extract_directive, parse_when
+    assert extract_directive("remind me in 3 days") == ("in 3 days", "")
+    w, note = extract_directive("great paper https://x.com remind me 2026-08-01 18:00")
+    assert w == "2026-08-01 18:00" and "great paper" in note
+    assert extract_directive("just an article")[0] is None
+    dt = parse_when("2026-08-01 18:00", "Europe/Istanbul")
+    assert dt is not None and dt.tzinfo is not None
+    assert parse_when("in 2 days", "UTC") is not None
+
+
+def test_multi_link_split():
+    from briefer.telegram_bot import BrieferBot
+    subs = BrieferBot._split_submissions(None, "a https://x.com/1 b https://y.com/2", [])
+    assert len(subs) == 2
+    assert subs[0][0].startswith("https://x.com/1")
+    # single link → single item
+    one = BrieferBot._split_submissions(None, "just https://x.com/1", [])
+    assert len(one) == 1
+
+
+def test_error_message_classifier():
+    from briefer.telegram_bot import _error_message
+
+    class Credit(Exception):
+        pass
+    msg, infra = _error_message(Credit("Your credit balance is too low"))
+    assert infra and "credit" in msg.lower()
+    msg2, infra2 = _error_message(ValueError("boom"))
+    assert not infra2 and "boom" in msg2
+
+
 def test_guess_media_type():
     from briefer.media import guess_media_type
     assert guess_media_type(b"\xff\xd8\xff\xe0xx") == "image/jpeg"

@@ -26,9 +26,10 @@ _TRUE = {"TRUE", "✓", "YES", "1", "✔", "☑"}
 
 
 class SheetSync:
-    def __init__(self, sheets, store: Store) -> None:
+    def __init__(self, sheets, store: Store, timezone: str = "UTC") -> None:
         self.sheets = sheets
         self.store = store
+        self.timezone = timezone
 
     async def tick(self, context) -> None:  # JobQueue callback
         try:
@@ -44,18 +45,36 @@ class SheetSync:
             except Exception:  # noqa: BLE001
                 log.exception("sync failed for %s sheet", sheet)
 
+    def _maybe_sheet_reminder(self, entry: dict, remind_raw: str) -> None:
+        from .reminders import parse_when
+        when = parse_when(remind_raw, self.timezone)
+        if not when:
+            return
+        ts = when.timestamp()
+        prev = entry.get("sheet_remind_at")
+        if prev and abs(ts - float(prev)) < 60:
+            return  # already scheduled this exact time
+        self.store.add_reminder(
+            entry["chat_id"], ts, entry.get("title", "item"),
+            {"kind": "custom", "title": entry.get("title", "item"),
+             "note": "Reminder set from the sheet.",
+             "when": when.strftime("%Y-%m-%d %H:%M")},
+            entry_id=entry["id"])
+        self.store.set_entry_sheet_remind(entry["id"], ts)
+        log.info("Sheet reminder for %s at %s", entry["id"], when.isoformat())
+
     def _sync_sheet(self, sheet: str) -> None:
         ws = self.sheets.worksheet(sheet)
         headers = EVENT_HEADERS if sheet == "event" else ARTICLE_HEADERS
         cols = _control_cols(headers)
-        id_i, done_i = cols["id"] - 1, cols["done"] - 1
+        id_i, done_i, rem_i = cols["id"] - 1, cols["done"] - 1, cols["remind_at"] - 1
         try:
             values = ws.get_all_values()
         except Exception as exc:  # noqa: BLE001
             log.warning("could not read %s sheet: %s", sheet, exc)
             return
 
-        present: dict[str, tuple[int, bool]] = {}
+        present: dict[str, tuple[int, bool, str]] = {}
         for rnum, row in enumerate(values[1:], start=2):
             if len(row) <= id_i:
                 continue
@@ -63,7 +82,8 @@ class SheetSync:
             if not eid:
                 continue
             done = len(row) > done_i and row[done_i].strip().upper() in _TRUE
-            present[eid] = (rnum, done)
+            remind_raw = row[rem_i].strip() if len(row) > rem_i else ""
+            present[eid] = (rnum, done, remind_raw)
 
         for entry in self.store.active_entries(sheet):
             eid = entry["id"]
@@ -75,7 +95,12 @@ class SheetSync:
                 log.info("Entry %s deleted from %s sheet — reminders cancelled",
                          eid, sheet)
                 continue
-            rnum, done = present[eid]
+            rnum, done, remind_raw = present[eid]
+            # Sheet-driven "Remind At": user typed a date → schedule a reminder.
+            if remind_raw:
+                self._maybe_sheet_reminder(entry, remind_raw)
+            elif entry.get("sheet_remind_at"):
+                self.store.set_entry_sheet_remind(eid, None)  # cleared
             if done and entry["checked_at"] is None:
                 now = time.time()
                 self.store.set_entry_checked(eid, now)

@@ -17,6 +17,9 @@ python-pptx==1.0.2
 openpyxl==3.1.5
 python-dotenv==1.0.1
 tenacity==9.0.0
+# Natural-language date parsing for custom reminders ("in 3 days", "tomorrow
+# 5pm", "2026-08-01", also Turkish).
+dateparser==1.2.0
 
 # Media: X/Twitter, video/audio transcription, image galleries.
 yt-dlp==2024.12.13

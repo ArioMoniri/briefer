@@ -134,9 +134,11 @@ def _appended_row_number(resp: Any) -> int | None:
     except Exception:  # noqa: BLE001
         return None
 
-# Control columns appended after the data + Image column. Their presence and
-# order is relied on by sheet_sync, so keep them last and in this order.
-_CONTROL = ["ID", "Done", "Checked At", "Time→Check (h)"]
+# Trailing (non-data) columns, in order. The bot writes Image/ID/Done/Checked
+# At/Time; NOTES and MY TAGS are yours to fill and are never overwritten (a
+# cumulative re-submission only rewrites the data columns).
+_TRAILING = ["Image", "ID", "Done", "Checked At", "Time→Check (h)",
+             "Notes", "My Tags", "Remind At"]
 
 _ARTICLE_DATA = [
     "Captured At", "Title", "Type", "Summary", "Catch Points",
@@ -150,20 +152,19 @@ _EVENT_DATA = [
     "Catch Points", "Vivax Relevance", "Should Apply", "Verified",
     "Deadline Confidence", "Verification Notes", "Source", "Submitted By",
 ]
-# Full header = data columns + Image + control columns.
-ARTICLE_HEADERS = _ARTICLE_DATA + ["Image"] + _CONTROL
-EVENT_HEADERS = _EVENT_DATA + ["Image"] + _CONTROL
-
-# 1-based column numbers of the control block (same offsets for both sheets,
-# counted from the end): …, Image, ID, Done, Checked At, Time→Check.
-_N_CONTROL = len(_CONTROL)  # 4
+ARTICLE_HEADERS = _ARTICLE_DATA + _TRAILING
+EVENT_HEADERS = _EVENT_DATA + _TRAILING
 
 
 def _control_cols(headers: list[str]) -> dict[str, int]:
-    n = len(headers)
+    """1-based column numbers of the trailing columns, looked up by name."""
+    def col(name: str) -> int:
+        return headers.index(name) + 1
     return {
-        "image": n - 4, "id": n - 3, "done": n - 2,
-        "checked_at": n - 1, "time": n,
+        "image": col("Image"), "id": col("ID"), "done": col("Done"),
+        "checked_at": col("Checked At"), "time": col("Time→Check (h)"),
+        "notes": col("Notes"), "tags": col("My Tags"),
+        "remind_at": col("Remind At"),
     }
 
 
@@ -288,8 +289,9 @@ class SheetsClient:
         ws = self.worksheet(sheet)
         headers = EVENT_HEADERS if sheet == "event" else ARTICLE_HEADERS
         cols = _control_cols(headers)
-        # data + Image("") + ID + Done(FALSE) + Checked At("") + Time("")
-        row = data + ["", entry_id, "FALSE", "", ""]
+        # Trailing: Image, ID, Done, Checked At, Time, Notes, My Tags, Remind At.
+        # Done left blank here; _make_checkbox sets a real boolean + checkbox.
+        row = data + ["", entry_id, "", "", "", "", "", ""]
         # RAW: untrusted content is never parsed as a formula.
         resp = ws.append_row(row, value_input_option="RAW")
         rownum = _appended_row_number(resp)
@@ -307,15 +309,23 @@ class SheetsClient:
                             entry_id, images)
 
     def _make_checkbox(self, ws: gspread.Worksheet, row: int, col: int) -> None:
+        grid = {"sheetId": ws.id,
+                "startRowIndex": row - 1, "endRowIndex": row,
+                "startColumnIndex": col - 1, "endColumnIndex": col}
         try:
-            ws.spreadsheet.batch_update({"requests": [{
-                "setDataValidation": {
-                    "range": {"sheetId": ws.id,
-                              "startRowIndex": row - 1, "endRowIndex": row,
-                              "startColumnIndex": col - 1, "endColumnIndex": col},
+            ws.spreadsheet.batch_update({"requests": [
+                # 1) write a real boolean FALSE (not the text "FALSE", which
+                #    would violate the checkbox rule → "Invalid" error).
+                {"repeatCell": {
+                    "range": grid,
+                    "cell": {"userEnteredValue": {"boolValue": False}},
+                    "fields": "userEnteredValue"}},
+                # 2) render it as a checkbox.
+                {"setDataValidation": {
+                    "range": grid,
                     "rule": {"condition": {"type": "BOOLEAN"},
-                             "showCustomUi": True, "strict": False},
-                }}]})
+                             "showCustomUi": True, "strict": True}}},
+            ]})
         except Exception as exc:  # noqa: BLE001
             log.warning("could not set checkbox: %s", exc)
 

@@ -24,7 +24,7 @@ from .calendar_ics import build_event_ics
 from .config import Config
 from .enrich import (Attachment, make_image_attachment, make_pdf_attachment,
                      make_text_attachment, make_media_attachment,
-                     make_office_attachment)
+                     make_office_attachment, URL_RE)
 from .pipeline import Pipeline, Result
 from .security import RateLimiter, verify_password, hash_password
 from .storage import Store
@@ -370,8 +370,48 @@ class BrieferBot:
             await self._reply(update, "Send text, a link, a file, an image or an event.")
             return
 
+        # Standalone reminder: a reply or plain message that is ONLY a
+        # "remind me <when>" directive (no link/file to analyse).
+        from .reminders import extract_directive, parse_when
+        when_phrase, note = extract_directive(text)
+        has_content = bool(descriptors) or bool(URL_RE.search(text or ""))
+        if when_phrase and not has_content:
+            when = parse_when(when_phrase, self.cfg.timezone)
+            if not when:
+                await self._reply(update, "I couldn't understand that time. Try "
+                                  "`remind me in 3 days` or `remind me 2026-08-01 18:00`.")
+                return
+            reply_text = ""
+            if msg.reply_to_message is not None:
+                rm = msg.reply_to_message
+                reply_text = (rm.text or rm.caption or "")[:500]
+            note_text = note or reply_text or "(reminder)"
+            title = (reply_text or note or "Reminder")[:80]
+            self._add_custom_reminder(update.effective_chat.id, when, title,
+                                      note_text, None)
+            await self._reply(update, "⏰ Reminder set for "
+                              + when.strftime("%Y-%m-%d %H:%M") + ".")
+            return
+
         force_kind = ctx.user_data.pop("force_kind", None)
-        await self._enqueue(update, text, descriptors, force_kind)
+        # One message may contain several links/items — analyse each separately.
+        for sub_text, sub_desc in self._split_submissions(text, descriptors):
+            await self._enqueue(update, sub_text, sub_desc, force_kind)
+
+    def _split_submissions(self, text: str, descriptors: list[dict[str, Any]]
+                           ) -> list[tuple[str, list[dict[str, Any]]]]:
+        from .reminders import extract_directive
+        urls = list(dict.fromkeys(URL_RE.findall(text or "")))
+        if len(urls) <= 1:
+            return [(text, descriptors)]
+        # Preserve any reminder directive on every split item.
+        when_phrase, _ = extract_directive(text)
+        directive = f" remind me {when_phrase}" if when_phrase else ""
+        subs: list[tuple[str, list[dict[str, Any]]]] = [
+            (u + directive, []) for u in urls]
+        for d in descriptors:  # attachments become their own items
+            subs.append((directive.strip(), [d]))
+        return subs
 
     async def _collect_descriptors(self, msg) -> list[dict[str, Any]]:
         """Describe attachments by Telegram file_id (not bytes), so a queued
@@ -524,12 +564,16 @@ class BrieferBot:
                 job["submitter"], job["force_kind"], chat_id)
         except Exception as exc:  # noqa: BLE001
             log.exception("pipeline failure (job %s)", job["id"])
-            reason = f"{type(exc).__name__}: {exc}"
-            app.bot_data["last_error"] = reason
-            self.store.finish_job(job["id"], "failed", reason)
-            await edit("⚠️ Analysis failed.\n<code>" + html.escape(reason[:350])
-                       + "</code>\nSee <b>/logs</b> for detail.",
+            app.bot_data["last_error"] = f"{type(exc).__name__}: {exc}"
+            self.store.finish_job(job["id"], "failed", str(exc))
+            friendly, infra = _error_message(exc)
+            await edit("⚠️ Analysis failed.\n" + html.escape(friendly)
+                       + "\nSee <b>/logs</b> for detail.",
                        parse_mode=ParseMode.HTML)
+            if infra:  # API credits / rate / auth → ping the operators too
+                await self._notify_admins(
+                    app, "⚠️ <b>Service issue</b>\n" + html.escape(friendly),
+                    exclude=chat_id)
             return
 
         if result.updated and not result.changed:
@@ -550,9 +594,25 @@ class BrieferBot:
 
         # Schedule reminders only for brand-new events (updates keep theirs).
         if result.kind == "event" and not result.updated:
-            if result.deadline_dt:
-                self._schedule_deadline(chat_id, result)
+            self._schedule_event_reminders(chat_id, result)
             await self._send_calendar(bot, chat_id, result)
+
+        # Inline "remind me <when>" directive in the submission text → a custom
+        # reminder for this entry (works for articles too).
+        from .reminders import extract_directive, parse_when
+        when_phrase, _ = extract_directive(job["text"])
+        if when_phrase:
+            when = parse_when(when_phrase, self.cfg.timezone)
+            if when:
+                self._add_custom_reminder(
+                    chat_id, when, str(result.analysis.get("title", "item")),
+                    "Your reminder for this item.", result.entry_id)
+                try:
+                    await bot.send_message(
+                        chat_id, "⏰ Reminder set for "
+                        + html.escape(when.strftime("%Y-%m-%d %H:%M")) + ".")
+                except Exception:  # noqa: BLE001
+                    pass
 
     # ------------------------------------------------------------------
     # Calendar (.ics) export
@@ -613,48 +673,82 @@ class BrieferBot:
     # ------------------------------------------------------------------
     # Deadline reminders
     # ------------------------------------------------------------------
-    def _schedule_deadline(self, chat_id: int, result: Result) -> None:
-        dt = result.deadline_dt
-        if dt is None:
-            return
-        # A naive deadline is in the configured local timezone (matches the
-        # calendar exporter), not UTC.
-        dt = self._localize(dt)
+    def _schedule_event_reminders(self, chat_id: int, result: Result) -> None:
+        """Schedule reminder sets for BOTH the application deadline and the
+        event date itself (each with the configured lead times)."""
         title = result.analysis.get("title", "event")
+        a = result.analysis
+        if result.deadline_dt:
+            self._schedule_lead_reminders(
+                chat_id, self._localize(result.deadline_dt), result.entry_id,
+                kind="deadline", title=title,
+                extra={"deadline": self._localize(result.deadline_dt).isoformat(),
+                       "application_url": a.get("application_url"),
+                       "required": a.get("required_materials", [])})
+        if result.event_dt:
+            self._schedule_lead_reminders(
+                chat_id, self._localize(result.event_dt), result.entry_id,
+                kind="event_date", title=title,
+                extra={"when": self._localize(result.event_dt).isoformat(),
+                       "url": a.get("application_url") or a.get("event_url")})
+
+    def _schedule_lead_reminders(self, chat_id: int, when: datetime,
+                                 entry_id: str | None, *, kind: str, title: str,
+                                 extra: dict) -> None:
         now = datetime.now(timezone.utc)
         scheduled = 0
         for hours in sorted(self.cfg.deadline_reminder_hours, reverse=True):
-            fire = dt - timedelta(hours=hours)
+            fire = when - timedelta(hours=hours)
             if fire <= now:
                 continue
             self.store.add_reminder(
-                chat_id, fire.timestamp(),
-                f"{title} — {hours}h to deadline",
-                {"title": title,
-                 "deadline": dt.isoformat(),
-                 "application_url": result.analysis.get("application_url"),
-                 "required": result.analysis.get("required_materials", [])},
-                entry_id=result.entry_id,
-            )
+                chat_id, fire.timestamp(), f"{title} — {hours}h",
+                {"kind": kind, "title": title, **extra}, entry_id=entry_id)
             scheduled += 1
+        # Also fire exactly at the moment (in case all leads are in the past).
+        if scheduled == 0 and when > now:
+            self.store.add_reminder(
+                chat_id, when.timestamp(), title,
+                {"kind": kind, "title": title, **extra}, entry_id=entry_id)
+            scheduled = 1
         if scheduled:
-            log.info("Scheduled %d reminders for '%s'", scheduled, title)
+            log.info("Scheduled %d %s reminders for '%s'", scheduled, kind, title)
+
+    def _add_custom_reminder(self, chat_id: int, when: datetime, title: str,
+                             note: str, entry_id: str | None,
+                             url: str = "") -> None:
+        when = self._localize(when)
+        self.store.add_reminder(
+            chat_id, when.timestamp(), title,
+            {"kind": "custom", "title": title, "note": note,
+             "url": url, "when": when.strftime("%Y-%m-%d %H:%M")},
+            entry_id=entry_id)
+        log.info("Custom reminder for '%s' at %s", title, when.isoformat())
 
     async def reminder_tick(self, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         """JobQueue callback: fire any due reminders."""
         for r in self.store.due_reminders(time.time()):
             payload = r["payload"]
-            url = payload.get("application_url")
+            kind = payload.get("kind", "deadline")
+            title = html.escape(str(payload.get("title", "item")))
+            url = payload.get("application_url") or payload.get("url")
             required = payload.get("required") or []
-            body = (
-                f"⏰ <b>Deadline approaching</b>\n"
-                f"<b>{html.escape(payload.get('title', 'event'))}</b>\n"
-                f"Deadline: {html.escape(str(payload.get('deadline', '')))}\n"
-            )
+            if kind == "custom":
+                body = f"⏰ <b>Reminder</b>\n<b>{title}</b>\n"
+                if payload.get("note"):
+                    body += html.escape(str(payload["note"])[:600]) + "\n"
+                if payload.get("when"):
+                    body += f"<i>(set for {html.escape(str(payload['when']))})</i>\n"
+            elif kind == "event_date":
+                body = (f"📅 <b>Event coming up</b>\n<b>{title}</b>\n"
+                        f"When: {html.escape(str(payload.get('when', '')))}\n")
+            else:  # deadline
+                body = (f"⏰ <b>Application deadline approaching</b>\n<b>{title}</b>\n"
+                        f"Deadline: {html.escape(str(payload.get('deadline', '')))}\n")
             if required:
                 body += "Bring: " + html.escape(", ".join(map(str, required))[:300]) + "\n"
             if url:
-                body += f"Apply: {html.escape(str(url))}"
+                body += f"Link: {html.escape(str(url))}"
             try:
                 await ctx.bot.send_message(r["chat_id"], body, parse_mode=ParseMode.HTML,
                                            disable_web_page_preview=True)
@@ -664,6 +758,42 @@ class BrieferBot:
                 log.exception("failed to send reminder %s; will retry", r["id"])
                 continue
             self.store.mark_reminder_fired(r["id"])
+
+    # ------------------------------------------------------------------
+    # Error reporting
+    # ------------------------------------------------------------------
+    async def _notify_admins(self, app: "Application", text: str,
+                             exclude: int | None = None) -> None:
+        for cid in self.cfg.admins:
+            if cid == exclude:
+                continue
+            try:
+                await app.bot.send_message(cid, text, parse_mode=ParseMode.HTML,
+                                           disable_web_page_preview=True)
+            except Exception:  # noqa: BLE001
+                pass
+
+    async def on_error(self, update: object, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+        """Global handler: any uncaught error in a handler is logged and, for
+        service issues (API credits/rate/auth), reported to the admins."""
+        exc = getattr(ctx, "error", None)
+        log.error("handler error", exc_info=exc)
+        friendly, infra = _error_message(exc)
+        ctx.application.bot_data["last_error"] = (
+            f"{type(exc).__name__}: {exc}" if exc else "unknown")
+        chat_id = getattr(getattr(update, "effective_chat", None), "id", None)
+        # Tell the user something broke (if we know the chat).
+        if chat_id is not None:
+            try:
+                await ctx.bot.send_message(
+                    chat_id, "⚠️ " + html.escape(friendly),
+                    parse_mode=ParseMode.HTML, disable_web_page_preview=True)
+            except Exception:  # noqa: BLE001
+                pass
+        if infra:
+            await self._notify_admins(
+                ctx.application, "⚠️ <b>Service issue</b>\n" + html.escape(friendly),
+                exclude=chat_id)
 
     # ------------------------------------------------------------------
     # Utilities
@@ -734,6 +864,32 @@ def _gcal_link(title: str, start: datetime, all_day: bool, details: str,
         "details": details[:900], "location": location,
     }
     return "https://calendar.google.com/calendar/render?" + urlencode(params)
+
+
+def _error_message(exc: BaseException | None) -> tuple[str, bool]:
+    """Return (friendly message, is_infrastructure). Infra errors (API credits,
+    rate limits, auth) are worth pinging the admins about."""
+    if exc is None:
+        return "unknown error", False
+    name = type(exc).__name__
+    s = str(exc)
+    low = s.lower()
+    if any(k in low for k in ("credit balance", "insufficient", "billing",
+                              "quota", "payment")):
+        return ("💳 Anthropic API: out of credits / billing problem. Add "
+                "credit at console.anthropic.com — analysis resumes once it's "
+                "topped up.", True)
+    if name == "RateLimitError" or "rate limit" in low or "429" in s:
+        return ("⏳ Anthropic API rate limit reached. It retries automatically; "
+                "if it persists, slow down or raise your plan limit.", True)
+    if name == "AuthenticationError" or "invalid x-api-key" in low or (
+            "authentication" in low) or "401" in s:
+        return ("🔑 Anthropic API key was rejected. Check ANTHROPIC_API_KEY in "
+                ".env, then ./manage.sh restart.", True)
+    if "overloaded" in low or "529" in s:
+        return ("🌩️ Anthropic API is overloaded right now. Retrying shortly.",
+                True)
+    return f"{name}: {s[:300]}", False
 
 
 def _submitter(user) -> str:
@@ -870,10 +1026,12 @@ def build_application(cfg: Config, bot: BrieferBot) -> Application:
         & ~filters.COMMAND,
         bot.on_message))
 
+    app.add_error_handler(bot.on_error)
+
     if app.job_queue:
         app.job_queue.run_repeating(bot.reminder_tick, interval=60, first=10)
         # Sync the sheets (checkboxes, deletions, time-to-check stats).
         from .sheet_sync import SheetSync
-        sync = SheetSync(bot.pipeline.sheets, bot.store)
+        sync = SheetSync(bot.pipeline.sheets, bot.store, cfg.timezone)
         app.job_queue.run_repeating(sync.tick, interval=60, first=25)
     return app

@@ -101,6 +101,13 @@ class Enricher:
         self.enable_link_guard = enable_link_guard
         self.link_guard_model = link_guard_model
         self.safe_browsing_key = safe_browsing_key
+        # If egress goes through an HTTP proxy, the proxy owns DNS + policy, so
+        # IP-pinning is unnecessary and can break the tunnel — pin only on
+        # direct egress, where DNS-rebinding is a real concern.
+        self._proxied = bool(
+            os.environ.get("HTTPS_PROXY") or os.environ.get("https_proxy")
+            or os.environ.get("ALL_PROXY") or os.environ.get("all_proxy")
+        )
 
     def _try_gallery(self, url: str, content: EnrichedContent) -> int:
         """Fallback downloader for image posts → vision. Returns #images."""
@@ -113,13 +120,6 @@ class Enricher:
             content.attachments.append(
                 make_image_attachment(data, guess_media_type(data), "post_image"))
         return len(imgs)
-        # If egress goes through an HTTP proxy, the proxy owns DNS + policy, so
-        # IP-pinning is both unnecessary and can break the proxy tunnel. Only
-        # pin on direct egress, where DNS-rebinding is a real concern.
-        self._proxied = bool(
-            os.environ.get("HTTPS_PROXY") or os.environ.get("https_proxy")
-            or os.environ.get("ALL_PROXY") or os.environ.get("all_proxy")
-        )
 
     def _fetch(self, url: str) -> httpx.Response | None:
         # Follow redirects manually so EVERY hop is validated with the SSRF

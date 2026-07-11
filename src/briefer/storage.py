@@ -91,6 +91,12 @@ class Store:
             self._conn.execute("ALTER TABLE reminders ADD COLUMN entry_id TEXT")
         except sqlite3.OperationalError:
             pass
+        # Track the last sheet-driven "Remind At" we scheduled, so we don't
+        # reschedule it every sync tick.
+        try:
+            self._conn.execute("ALTER TABLE entries ADD COLUMN sheet_remind_at REAL")
+        except sqlite3.OperationalError:
+            pass
         self._conn.commit()
 
     # --- sessions ----------------------------------------------------
@@ -266,13 +272,21 @@ class Store:
     def _entry_row(self, r) -> dict[str, Any]:
         return {"id": r[0], "chat_id": r[1], "sheet": r[2], "fingerprint": r[3],
                 "title": r[4], "analysis": json.loads(r[5] or "{}"),
-                "created_at": r[6], "checked_at": r[7], "removed": r[8]}
+                "created_at": r[6], "checked_at": r[7], "removed": r[8],
+                "sheet_remind_at": r[9] if len(r) > 9 else None}
+
+    def set_entry_sheet_remind(self, entry_id: str, ts: float | None) -> None:
+        with self._lock:
+            self._conn.execute(
+                "UPDATE entries SET sheet_remind_at = ? WHERE id = ?",
+                (ts, entry_id))
+            self._conn.commit()
 
     def entry_by_fingerprint(self, fp: str) -> dict[str, Any] | None:
         with self._lock:
             r = self._conn.execute(
                 "SELECT id, chat_id, sheet, fingerprint, title, analysis, "
-                "created_at, checked_at, removed FROM entries "
+                "created_at, checked_at, removed, sheet_remind_at FROM entries "
                 "WHERE fingerprint = ? AND removed = 0 ORDER BY created_at LIMIT 1",
                 (fp,)).fetchone()
         return self._entry_row(r) if r else None
@@ -281,7 +295,7 @@ class Store:
         with self._lock:
             rows = self._conn.execute(
                 "SELECT id, chat_id, sheet, fingerprint, title, analysis, "
-                "created_at, checked_at, removed FROM entries "
+                "created_at, checked_at, removed, sheet_remind_at FROM entries "
                 "WHERE sheet = ? AND removed = 0", (sheet,)).fetchall()
         return [self._entry_row(r) for r in rows]
 
