@@ -372,6 +372,51 @@ def test_status_tags_consistent():
     assert status_tag("event", False, datetime(2026, 11, 4), None, now)
 
 
+def test_readd_after_delete_creates_new_row():
+    """Add → delete the row → re-send the same link ⇒ a fresh row, not a
+    silent update of a ghost."""
+    import tempfile
+    import os as _os
+    _os.environ.update(
+        TELEGRAM_BOT_TOKEN="x", ANTHROPIC_API_KEY="x", LOGIN_PASSWORD="p",
+        ALLOWED_CHAT_IDS="1", BRIEFER_BOOTSTRAP="1", ENABLE_WEB_SEARCH="0",
+        FOLLOW_NESTED_LINKS="0", DATA_DIR=tempfile.mkdtemp())
+    from briefer.config import load_config
+    from briefer.enrich import Enricher
+    from briefer.pipeline import Pipeline
+    from briefer.storage import Store
+
+    cfg = load_config()
+    store = Store(cfg.db_path)
+
+    class LLM:
+        model = "m"; verify_model = "v"
+        def json(self, sy, u, *, verify=False, images=None, model=None, max_tokens=2000):
+            if "Classify" in sy:
+                return {"type": "article"}
+            if "fact-checker" in sy:
+                return {"verified": True, "issues": [], "corrected": {}}
+            return {"title": "RisQ", "summary": "d", "tags": ["ai"]}
+
+    class Sheets:
+        articles_id = "A"; events_id = "E"
+        def __init__(self): self.rows = {}; self.n = 1; self.appends = 0
+        def append_article(self, a, src, u, imgs=None, eid="", status=""):
+            self.n += 1; self.rows[eid] = self.n; self.appends += 1; return self.n
+        def append_event(self, *a, **k): return 1
+        def find_row_by_id(self, sheet, eid): return self.rows.get(eid)
+        def update_data_row(self, *a, **k):
+            raise AssertionError("must not update a deleted (ghost) row")
+
+    sh = Sheets()
+    p = Pipeline(cfg, LLM(), Enricher(cfg.max_download_bytes), sh, store)
+    r1 = p.process("https://x.com/risq", [], "me")
+    del sh.rows[r1.entry_id]          # user deletes the row
+    r2 = p.process("https://x.com/risq", [], "me")
+    assert sh.appends == 2 and r2.entry_id != r1.entry_id and not r2.updated
+    store.close()
+
+
 def test_semantic_dedup_key():
     from briefer.pipeline import _dedup_key
     k1 = _dedup_key("event", {"title": "SIMYA Industrial AI Demo Day",
