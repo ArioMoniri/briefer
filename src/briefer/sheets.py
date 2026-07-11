@@ -468,23 +468,16 @@ class SheetsClient:
         if images:
             self._save_image(ws, rownum, _control_cols(headers)["image"], images)
 
-    def write_stats(self, sheet: str, stats: dict[str, Any]) -> None:
-        """Maintain a 'Stats' tab (per spreadsheet) with counts + averages."""
+    def write_stats(self, sheet: str, rows: list[list[Any]]) -> None:
+        """Maintain a 'Stats' tab (per spreadsheet) from a key/value rows list."""
         ss = self.worksheet(sheet).spreadsheet
         try:
             try:
                 st = ss.worksheet("Stats")
             except gspread.WorksheetNotFound:
-                st = ss.add_worksheet(title="Stats", rows=20, cols=3)
-            when = datetime.now(timezone.utc).astimezone().isoformat(timespec="seconds")
-            rows = [
-                ["Metric", "Value"],
-                ["Total entries", stats.get("total", 0)],
-                ["Checked (done)", stats.get("checked", 0)],
-                ["Removed from sheet", stats.get("removed", 0)],
-                ["Avg time to check (hours)", stats.get("avg_check_hours", 0)],
-                ["Updated at", when],
-            ]
+                st = ss.add_worksheet(title="Stats", rows=40, cols=3)
+            # Clear old body then write (in case the metric count shrank).
+            st.update([[""] * 2 for _ in range(30)], "A1", value_input_option="RAW")
             st.update(rows, "A1", value_input_option="RAW")
         except Exception as exc:  # noqa: BLE001
             log.warning("write_stats failed: %s", exc)

@@ -110,6 +110,7 @@ class Config:
     web_search_api_key: str
     web_search_max_results: int
     web_search_only_if_apply_missing: bool
+    cookie_warn_days: int
 
     # Behaviour
     max_download_bytes: int
@@ -257,6 +258,8 @@ def load_config() -> Config:
         web_search_max_results=_get_int("WEB_SEARCH_MAX_RESULTS", 5),
         web_search_only_if_apply_missing=_get_bool(
             "WEB_SEARCH_ONLY_IF_APPLY_MISSING", False),
+        # Warn (in Telegram) when a login cookie has this many days or fewer left.
+        cookie_warn_days=_get_int("COOKIE_WARN_DAYS", 3),
         company_name=_get("COMPANY_NAME", "Vivax"),
         company_url=_get("COMPANY_URL", "https://getvivax.com"),
         company_focus=_get(

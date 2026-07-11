@@ -247,18 +247,53 @@ class BrieferBot:
         if not await self._require_auth(update):
             return
 
+        from .stats import rich_stats
+
         def block(name: str, sheet: str) -> str:
-            s = self.store.entry_stats(sheet)
-            return (f"<b>{name}</b>\n"
-                    f"  Total: {s['total']} · Done: {s['checked']} · "
-                    f"Removed: {s['removed']}\n"
-                    f"  Avg time to check: {s['avg_check_hours']} h")
+            s = rich_stats(self.store, sheet)
+            b = s["by_status"]
+            return (
+                f"<b>{name}</b> — {s['total']} active\n"
+                f"  ✅ Done {s['done']} ({s['done_pct']}%) · ⏳ Pending {s['pending']}\n"
+                f"  🔴 Overdue {s['overdue']} · 📅 Next 7d {s['upcoming_7d']} · "
+                f"🆕 Added 7d {s['added_7d']}\n"
+                f"  Status: 🔴{b['passed']} 🟠{b['due_soon']} 🟡{b['coming']} "
+                f"🟢{b['upcoming']} ⚪{b['no_date']}\n"
+                f"  Time to check: avg {s['avg_check_hours']}h · "
+                f"median {s['median_check_hours']}h\n"
+                f"  🗑 Removed all-time: {s['removed']}")
 
         await self._reply(
             update,
-            "📊 <b>Statistics</b>\n" + block("Articles", "article")
-            + "\n" + block("Events", "event"),
+            "📊 <b>Statistics</b>\n\n" + block("Articles", "article")
+            + "\n\n" + block("Events", "event"),
             parse_mode=ParseMode.HTML)
+
+    async def cmd_cookies(self, update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+        if not await self._require_auth(update):
+            return
+        from .cookies import cookie_status, format_status
+        rows = cookie_status(self.cfg, self.cfg.cookie_warn_days)
+        msg = format_status(rows)
+        if any(r.get("status") in ("expired", "expiring") for r in rows):
+            msg += ("\n\n⚠️ Renew with <code>./manage.sh browser-login</code> "
+                    "(or refresh cookies.txt).")
+        await self._reply(update, msg, parse_mode=ParseMode.HTML)
+
+    async def cookie_check(self, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+        """Daily job: warn admins if any login cookie is expired/expiring."""
+        from .cookies import cookie_status, problems
+        rows = cookie_status(self.cfg, self.cfg.cookie_warn_days)
+        bad = problems(rows)
+        if not bad:
+            return
+        lines = ["⚠️ <b>Login cookies need attention</b>"]
+        for r in bad:
+            d = r.get("days_left")
+            state = "EXPIRED" if (d is not None and d < 0) else f"{d}d left"
+            lines.append(f"🔴 {r['platform']} — {state}")
+        lines.append("\nRenew: <code>./manage.sh browser-login</code>")
+        await self._notify_admins(ctx.application, "\n".join(lines))
 
     async def cmd_logs(self, update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         """Admin: show recent log lines. `/logs` = last 30, `/logs errors`
@@ -1034,6 +1069,7 @@ BOT_COMMANDS = [
     ("calendar", "Calendar view of all reminders"),
     ("status", "Bot health & sheet links"),
     ("stats", "Totals, checked, removed, avg time-to-check"),
+    ("cookies", "Login/cookie freshness (LinkedIn, etc.)"),
     ("logs", "Recent logs (admin)"),
     ("allow", "Allow a chat id (admin)"),
     ("deny", "Remove a chat id (admin)"),
@@ -1079,6 +1115,8 @@ def build_application(cfg: Config, bot: BrieferBot) -> Application:
     app.add_handler(CommandHandler("allowlist", bot.cmd_allowlist))
     app.add_handler(CommandHandler("status", bot.cmd_status))
     app.add_handler(CommandHandler("stats", bot.cmd_stats))
+    app.add_handler(CommandHandler("cookies", bot.cmd_cookies))
+    app.add_handler(CommandHandler("cookie", bot.cmd_cookies))
     app.add_handler(CommandHandler("logs", bot.cmd_logs))
     app.add_handler(CommandHandler("sheets", bot.cmd_sheets))
     app.add_handler(CommandHandler("deadlines", bot.cmd_deadlines))
@@ -1100,6 +1138,8 @@ def build_application(cfg: Config, bot: BrieferBot) -> Application:
 
     if app.job_queue:
         app.job_queue.run_repeating(bot.reminder_tick, interval=60, first=10)
+        # Warn admins once a day if a login cookie is expiring/expired.
+        app.job_queue.run_repeating(bot.cookie_check, interval=86400, first=120)
         # Sync the sheets (checkboxes, deletions, time-to-check stats).
         from .sheet_sync import SheetSync
         sync = SheetSync(bot.pipeline.sheets, bot.store, cfg.timezone)

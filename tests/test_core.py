@@ -417,6 +417,31 @@ def test_readd_after_delete_creates_new_row():
     store.close()
 
 
+def test_cookie_status():
+    import json
+    import tempfile
+    import time as _t
+    from briefer.cookies import cookie_status, problems
+    p = tempfile.mktemp()
+    with open(p, "w") as fh:
+        json.dump({"cookies": [
+            {"domain": ".linkedin.com", "name": "li_at", "expires": _t.time() + 40 * 86400},
+            {"domain": ".instagram.com", "name": "sessionid", "expires": _t.time() + 1 * 86400},
+            {"domain": ".x.com", "name": "auth_token", "expires": _t.time() - 5 * 86400},
+        ]}, fh)
+
+    class Cfg:
+        browser_storage_state_path = p
+        cookies_path = ""
+
+    rows = cookie_status(Cfg(), 3)
+    by = {r["platform"]: r["status"] for r in rows}
+    assert by["linkedin.com"] == "ok"
+    assert by["instagram.com"] == "expiring"
+    assert by["x.com"] == "expired"
+    assert {r["platform"] for r in problems(rows)} == {"instagram.com", "x.com"}
+
+
 def test_semantic_dedup_key():
     from briefer.pipeline import _dedup_key
     k1 = _dedup_key("event", {"title": "SIMYA Industrial AI Demo Day",

@@ -47,6 +47,8 @@ HELP = (
     "/deadlines – upcoming event deadlines I'm tracking\n"
     "/calendar – a calendar view of all your reminders\n"
     "/status – bot health + your sheet links\n"
+    "/stats – totals, done %, overdue, time-to-check\n"
+    "/cookies – login freshness (warns before expiry)\n"
     "/logs – recent logs / errors (admin)\n"
     "/login <password> – authenticate this chat\n"
     "/logout – end this chat's session\n"

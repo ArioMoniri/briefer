@@ -41,7 +41,10 @@ class SheetSync:
         for sheet in ("article", "event"):
             try:
                 self._sync_sheet(sheet)
-                self.sheets.write_stats(sheet, self.store.entry_stats(sheet))
+                from .stats import rich_stats, stats_rows
+                name = "Events" if sheet == "event" else "Articles"
+                self.sheets.write_stats(
+                    sheet, stats_rows(name, rich_stats(self.store, sheet)))
             except Exception:  # noqa: BLE001
                 log.exception("sync failed for %s sheet", sheet)
 
