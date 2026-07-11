@@ -311,10 +311,13 @@ class SheetsClient:
         return self._append("event", self._event_data(e, source, user),
                             entry_id, images, status)
 
-    # --- colored Status tags via conditional formatting --------------
+    # --- column-wide formatting: colored Status, checkbox, date picker ---
     def ensure_formatting(self, store) -> None:
-        """Apply background-color rules to the Status column so the tags render
-        as colored cells (once per spreadsheet, tracked via a meta flag)."""
+        """Apply, once per spreadsheet:
+        • colored Status tags (conditional formatting),
+        • a Done checkbox across the WHOLE column (fixes old rows too),
+        • a date/time PICKER + format on the Remind At column.
+        Column-wide ranges mean previously-created rows are upgraded as well."""
         rules = [
             ("Passed", (0.96, 0.80, 0.80)),      # red
             ("Due soon", (1.0, 0.87, 0.72)),     # orange
@@ -327,29 +330,57 @@ class SheetsClient:
         for sheet in ("article", "event"):
             try:
                 ws = self.worksheet(sheet)
-                sid = ws.spreadsheet.id
-                flag = f"cf_status_v1_{sid}"
+                flag = f"fmt_v2_{ws.spreadsheet.id}"
                 if store is not None and store.get_meta(flag):
                     continue
                 headers = EVENT_HEADERS if sheet == "event" else ARTICLE_HEADERS
-                col = _control_cols(headers)["status"]
-                grid = {"sheetId": ws.id, "startRowIndex": 1,
-                        "startColumnIndex": col - 1, "endColumnIndex": col}
-                reqs = []
+                cols = _control_cols(headers)
+
+                def colrange(c: int, r0: int = 1, r1: int = 50000) -> dict:
+                    return {"sheetId": ws.id, "startRowIndex": r0, "endRowIndex": r1,
+                            "startColumnIndex": c - 1, "endColumnIndex": c}
+
+                reqs: list[dict] = []
+                # Status color rules (skip header row).
+                st = {"sheetId": ws.id, "startRowIndex": 1,
+                      "startColumnIndex": cols["status"] - 1, "endColumnIndex": cols["status"]}
                 for i, (word, (r, g, b)) in enumerate(rules):
                     reqs.append({"addConditionalFormatRule": {"index": i, "rule": {
-                        "ranges": [grid],
+                        "ranges": [st],
                         "booleanRule": {
                             "condition": {"type": "TEXT_CONTAINS",
                                           "values": [{"userEnteredValue": word}]},
                             "format": {"backgroundColor":
                                        {"red": r, "green": g, "blue": b}}}}}})
+                # Done: checkbox across the whole column (upgrades old rows).
+                reqs.append({"setDataValidation": {
+                    "range": colrange(cols["done"]),
+                    "rule": {"condition": {"type": "BOOLEAN"},
+                             "showCustomUi": True, "strict": False}}})
                 ws.spreadsheet.batch_update({"requests": reqs})
+
+                # Remind At: date PICKER + datetime format (separate batch so a
+                # failure here can't undo the checkbox/status formatting).
+                try:
+                    ws.spreadsheet.batch_update({"requests": [
+                        {"setDataValidation": {
+                            "range": colrange(cols["remind_at"]),
+                            "rule": {"condition": {"type": "DATE_IS_VALID"},
+                                     "showCustomUi": True, "strict": False}}},
+                        {"repeatCell": {
+                            "range": colrange(cols["remind_at"]),
+                            "cell": {"userEnteredFormat": {"numberFormat": {
+                                "type": "DATE_TIME", "pattern": "yyyy-mm-dd hh:mm"}}},
+                            "fields": "userEnteredFormat.numberFormat"}}]})
+                except Exception as exc:  # noqa: BLE001
+                    log.warning("remind-at date picker not applied: %s", exc)
+
                 if store is not None:
                     store.set_meta(flag, "1")
-                log.info("Applied Status color rules to %s sheet", sheet)
+                log.info("Applied column formatting (status/checkbox/date) to "
+                         "%s sheet", sheet)
             except Exception as exc:  # noqa: BLE001
-                log.warning("could not apply status formatting: %s", exc)
+                log.warning("could not apply formatting: %s", exc)
 
     def archive_entry(self, sheet: str, entry: dict) -> None:
         """When a row is deleted, keep a copy in a 'Deleted' tab so it can be
