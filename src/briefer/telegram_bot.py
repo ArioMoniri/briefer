@@ -674,8 +674,12 @@ class BrieferBot:
             return
 
         prefix = "🔄 <b>Updated existing entry with new info</b>\n\n" if result.updated else ""
-        await edit(prefix + _format_catch(result), parse_mode=ParseMode.HTML,
-                   disable_web_page_preview=True)
+        try:
+            sheet_url = self.pipeline.sheets.row_url(result.kind, result.sheet_row)
+        except Exception:  # noqa: BLE001
+            sheet_url = None
+        await edit(prefix + _format_catch(result, sheet_url),
+                   parse_mode=ParseMode.HTML, disable_web_page_preview=True)
         # Checkpoint so /status shows progress and resets know where we are.
         self.store.set_meta("last_processed_at", int(time.time()))
         self.store.incr_meta("processed_total", 1)
@@ -1014,7 +1018,7 @@ def _li(items: Any, limit: int = 5) -> str:
     return out
 
 
-def _format_catch(result: Result) -> str:
+def _format_catch(result: Result, sheet_url: str | None = None) -> str:
     a = result.analysis
     verified = a.get("_verified")
     badge = "✅ verified" if verified else "⚠️ needs review"
@@ -1056,7 +1060,12 @@ def _format_catch(result: Result) -> str:
         parts.append("<i>🔎 Enriched & verified from " + str(len(web))
                      + " web source(s).</i>")
 
-    parts.append("<i>Saved to your Google Sheet.</i>")
+    if sheet_url:
+        row = f" (row {result.sheet_row})" if getattr(result, "sheet_row", None) else ""
+        parts.append(f'<i>Saved to <a href="{html.escape(sheet_url)}">your '
+                     f"Google Sheet</a>{row}.</i>")
+    else:
+        parts.append("<i>Saved to your Google Sheet.</i>")
     return "\n\n".join(parts)
 
 

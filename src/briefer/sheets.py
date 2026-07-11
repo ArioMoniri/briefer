@@ -221,6 +221,19 @@ class SheetsClient:
     def events_id(self) -> str:
         return self._events.spreadsheet.id
 
+    def row_url(self, sheet: str, rownum: int | None = None) -> str:
+        """A deep link to the exact spreadsheet (and row) the bot wrote to.
+
+        Putting this in every reply makes it impossible to look at the 'wrong'
+        Briefer sheet — the link always points at the one the bot is actually
+        using, on the specific row."""
+        ws = self.worksheet(sheet)
+        url = (f"https://docs.google.com/spreadsheets/d/"
+               f"{ws.spreadsheet.id}/edit#gid={ws.id}")
+        if rownum:
+            url += f"&range=A{rownum}"
+        return url
+
     def _open_or_create(self, sheet_id: str, title: str,
                         headers: list[str]) -> gspread.Worksheet:
         if sheet_id:
