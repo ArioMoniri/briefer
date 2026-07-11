@@ -83,6 +83,16 @@ CREATE TABLE IF NOT EXISTS people (
     name       TEXT NOT NULL,
     updated_at REAL NOT NULL
 );
+-- Maps a bot result message to the entry it reported, so replying to that
+-- message ("pass this to John", "remind me tomorrow", "note: …") acts on that
+-- row instead of being analysed as new content.
+CREATE TABLE IF NOT EXISTS row_messages (
+    chat_id    INTEGER NOT NULL,
+    message_id INTEGER NOT NULL,
+    entry_id   TEXT,
+    sheet      TEXT,
+    PRIMARY KEY (chat_id, message_id)
+);
 -- One assignment per entry: who a row is assigned to, and the state of their
 -- notification (delivered, acknowledged/seen, checked-done).
 CREATE TABLE IF NOT EXISTS assignments (
@@ -333,6 +343,12 @@ class Store:
                 "ORDER BY created_at LIMIT 1", (fp,)).fetchone()
         return self._entry_row(r) if r else None
 
+    def get_entry(self, entry_id: str) -> dict[str, Any] | None:
+        with self._lock:
+            r = self._conn.execute(
+                self._SELECT + "WHERE id = ?", (entry_id,)).fetchone()
+        return self._entry_row(r) if r else None
+
     def active_entries(self, sheet: str) -> list[dict[str, Any]]:
         with self._lock:
             rows = self._conn.execute(
@@ -494,6 +510,23 @@ class Store:
             r = self._conn.execute(
                 "SELECT name FROM people WHERE chat_id = ?", (chat_id,)).fetchone()
         return r[0] if r else None
+
+    # --- result message → entry (for replies) ------------------------
+    def set_row_message(self, chat_id: int, message_id: int, entry_id: str,
+                        sheet: str) -> None:
+        with self._lock:
+            self._conn.execute(
+                "INSERT OR REPLACE INTO row_messages(chat_id, message_id, "
+                "entry_id, sheet) VALUES (?,?,?,?)",
+                (chat_id, message_id, entry_id, sheet))
+            self._conn.commit()
+
+    def get_row_message(self, chat_id: int, message_id: int) -> dict[str, Any] | None:
+        with self._lock:
+            r = self._conn.execute(
+                "SELECT entry_id, sheet FROM row_messages WHERE chat_id=? AND "
+                "message_id=?", (chat_id, message_id)).fetchone()
+        return {"entry_id": r[0], "sheet": r[1]} if r else None
 
     # --- assignments -------------------------------------------------
     def get_assignment(self, entry_id: str) -> dict[str, Any] | None:

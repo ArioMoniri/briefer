@@ -553,6 +553,96 @@ class BrieferBot:
         except Exception:  # noqa: BLE001
             log.warning("could not refresh assignee dropdown")
 
+    async def _handle_reply_directive(self, update: Update, text: str) -> bool:
+        """When a user replies to a result message, apply a directive (assign /
+        note / remind) to that row. Returns True if it was handled."""
+        msg = update.message
+        chat_id = update.effective_chat.id
+        mapping = self.store.get_row_message(chat_id, msg.reply_to_message.message_id)
+        if not mapping or not mapping.get("entry_id"):
+            return False
+        eid, sheet = mapping["entry_id"], mapping.get("sheet") or "article"
+        entry = self.store.get_entry(eid)
+        title = (entry.get("title") if entry else None) or "this row"
+        from .reminders import (extract_directive, extract_note,
+                                extract_assignee_name, parse_when)
+
+        # 1) reminder
+        when_phrase, _ = extract_directive(text)
+        if when_phrase:
+            when = parse_when(when_phrase, self.cfg.timezone)
+            if not when:
+                await self._reply(update, "I couldn't understand that time.")
+                return True
+            self.store.add_reminder(
+                chat_id, when.timestamp(), title,
+                {"kind": "custom", "source": "reply", "title": title,
+                 "when": when.strftime("%Y-%m-%d %H:%M")}, entry_id=eid)
+            await self._reply(update, f"⏰ Reminder set for "
+                              f"*{when.strftime('%Y-%m-%d %H:%M')}* on _{title}_.")
+            return True
+
+        # 2) note
+        note, _ = extract_note(text)
+        if note:
+            row = self.pipeline.sheets.find_row_by_id(sheet, eid)
+            if row:
+                self.pipeline.sheets.write_note(sheet, row, note)
+            await self._reply(update, "📝 Added to the *Notes* column.")
+            return True
+
+        # 3) assignment — "pass this to X", "assign to X", or a bare person name
+        name = extract_assignee_name(text)
+        if not name and self.store.person_by_name((text or "").strip()):
+            name = (text or "").strip()
+        if name:
+            await self._assign_entry(update, eid, sheet, name, title)
+            return True
+        return False
+
+    async def _assign_entry(self, update: Update, eid: str, sheet: str,
+                            name: str, title: str) -> None:
+        person = self.store.person_by_name(name)  # case-insensitive
+        chat_id = person["chat_id"] if person else None
+        self.store.set_assignment(eid, sheet, name, chat_id)
+        row = self.pipeline.sheets.find_row_by_id(sheet, eid)
+        if row:
+            self.pipeline.sheets.write_assignee_name(sheet, row, name)
+        if person:
+            url = self.pipeline.sheets.row_url(sheet, row) if row else None
+            await self._ping_assignee(update.get_bot(), person["chat_id"], eid,
+                                      title, sheet, url)
+            self.store.mark_assignment_notified(eid)
+            await self._reply(update, f"👤 Assigned to *{html.escape(person['name'])}* "
+                              f"— they've been pinged.", parse_mode=ParseMode.MARKDOWN)
+        else:
+            if row:
+                self.pipeline.sheets.write_assignee_cells(
+                    sheet, row, seen=f"⚠️ '{name}' not mapped — /name")
+            await self._reply(update, f"👤 Set assignee to *{html.escape(name)}*, but "
+                              f"they're not mapped yet — `/name <chat_id> {html.escape(name)}` "
+                              f"so I can ping them.", parse_mode=ParseMode.MARKDOWN)
+
+    async def _ping_assignee(self, bot, to_chat: int, eid: str, title: str,
+                             sheet: str, url: str | None) -> None:
+        kb = InlineKeyboardMarkup([[
+            InlineKeyboardButton("👀 Seen", callback_data=f"asgn:seen:{eid}"),
+            InlineKeyboardButton("✅ Mark checked", callback_data=f"asgn:done:{eid}"),
+        ]])
+        link = f'\n<a href="{url}">Open the row</a>' if url else ""
+        sheet_name = "Events" if sheet == "event" else "Articles"
+        try:
+            await bot.send_message(
+                chat_id=to_chat,
+                text=(f"📌 <b>You've been asked to check something</b>\n\n"
+                      f"<b>{html.escape(str(title))}</b>\n<i>{sheet_name}</i>{link}\n\n"
+                      f"Tap <b>👀 Seen</b> to acknowledge, and <b>✅ Mark checked</b> "
+                      f"when done."),
+                parse_mode=ParseMode.HTML, disable_web_page_preview=True,
+                reply_markup=kb)
+        except Exception:  # noqa: BLE001
+            log.warning("could not DM assignee %s (did they /start?)", to_chat)
+
     # ------------------------------------------------------------------
     # Message ingestion
     # ------------------------------------------------------------------
@@ -576,6 +666,12 @@ class BrieferBot:
             log.exception("attachment descriptor error")
             await self._reply(update, "⚠️ I couldn't read that attachment.")
             return
+
+        # Reply to a result message → act on THAT row (assign / note / remind)
+        # instead of analysing the reply as new content.
+        if msg.reply_to_message is not None:
+            if await self._handle_reply_directive(update, text):
+                return
 
         if not text and not descriptors:
             await self._reply(update, "Send text, a link, a file, an image or an event.")
@@ -805,6 +901,11 @@ class BrieferBot:
         self.store.incr_meta("processed_total", 1)
         if getattr(result, "sheet_row", None):
             self.store.set_meta(f"{result.kind}_last_row", result.sheet_row)
+        # Remember which row this message reported, so a REPLY to it ("pass to
+        # John", "remind me…", "note: …") acts on that row, not as new content.
+        if note_id and result.entry_id:
+            self.store.set_row_message(chat_id, note_id, result.entry_id,
+                                       result.kind)
         self.store.finish_job(job["id"], "done")
 
         if result.kind == "event":

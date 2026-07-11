@@ -231,6 +231,24 @@ def test_merge_dedups_reworded_bullets_and_keeps_good_scalars():
     assert again["catch_points"] == merged["catch_points"] and changed2 is False
 
 
+def test_reply_mapping_and_case_insensitive_people():
+    import tempfile
+    from briefer.storage import Store
+    from briefer.reminders import extract_assignee_name
+    s = Store(tempfile.mktemp())
+    # message → entry mapping (so replies act on the row)
+    s.set_row_message(7, 555, "e1", "article")
+    assert s.get_row_message(7, 555) == {"entry_id": "e1", "sheet": "article"}
+    assert s.get_row_message(7, 999) is None
+    # any capitalization resolves to the same person
+    s.set_person(42, "Ario")
+    for q in ("ario", "ARIO", "Ario", "  aRiO "):
+        assert s.person_by_name(q)["chat_id"] == 42
+    # "pass this to X" pulls the name
+    assert extract_assignee_name("Pass this to masallah") == "masallah"
+    s.close()
+
+
 def test_extract_note_directive():
     from briefer.reminders import extract_note
     assert extract_note("https://x.com/a\nnote: call the CFO") == (

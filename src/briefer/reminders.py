@@ -57,6 +57,29 @@ def extract_note(text: str) -> tuple[Optional[str], str]:
     return m.group(1).strip(), text[: m.start()].strip()
 
 
+# "pass this to John", "assign it to John", "give to John", "for John", "→ John".
+_ASSIGN_RE = re.compile(
+    r"(?:pass|assign|give|send|forward|hand)\b(?:\s+(?:this|it|that))?"
+    r"(?:\s+over)?\s+to\s+(.+)$",
+    re.IGNORECASE | re.DOTALL,
+)
+_ASSIGN_RE2 = re.compile(r"(?:^|\b)(?:assign(?:ed)?|for|→|->)\s*[:]?\s*(.+)$",
+                         re.IGNORECASE | re.DOTALL)
+
+
+def extract_assignee_name(text: str) -> Optional[str]:
+    """Pull a name out of 'pass this to John' / 'assign to John' / 'for John'.
+    Returns the raw name string (not yet resolved to a person)."""
+    t = (text or "").strip()
+    if not t:
+        return None
+    m = _ASSIGN_RE.search(t) or _ASSIGN_RE2.search(t)
+    if not m:
+        return None
+    name = m.group(1).strip().strip(".!,;:").strip()
+    return name or None
+
+
 def parse_when(text: str, tz: str) -> Optional[datetime]:
     """Parse a natural-language or ISO time into a tz-aware future datetime."""
     if not text:

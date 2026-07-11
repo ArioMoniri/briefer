@@ -100,6 +100,15 @@ Also accepts dates: `remind me 2026-08-01 18:00`. You can also **reply** to any
 message with `remind me <when>`, or type a date in the sheet's **Remind At**
 column. Events already auto-remind before the deadline and the event date.
 
+### ↩️ Reply to a result to act on that row
+Reply to one of Briefer's **result messages** with:
+- `pass this to John` / `assign to John` / just a mapped **name** → assigns that
+  row (names are **case-insensitive**: `ario`, `Ario`, `ARIO` all match).
+- `remind me tomorrow` → a reminder on that row.
+- `note: <text>` → adds to that row's Notes.
+
+It acts on the **existing** row instead of creating a new item.
+
 ### 📎 Send many at once
 Paste **several links** or a big block — Briefer splits them into separate
 items, queues them, and replies under each. Nothing is dropped; the queue

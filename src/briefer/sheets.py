@@ -458,6 +458,17 @@ class SheetsClient:
             except Exception as exc:  # noqa: BLE001
                 log.warning("assignee dropdown (%s) failed: %s", sheet, exc)
 
+    def write_assignee_name(self, sheet: str, rownum: int, name: str) -> None:
+        """Write a name into the Assignee cell (e.g. when assigned via reply)."""
+        ws = self.worksheet(sheet)
+        headers = EVENT_HEADERS if sheet == "event" else ARTICLE_HEADERS
+        col = _control_cols(headers)["assignee"]
+        try:
+            ws.update([[name]], f"{_col_letter(col)}{rownum}",
+                      value_input_option="RAW")
+        except Exception as exc:  # noqa: BLE001
+            log.warning("write_assignee_name failed: %s", exc)
+
     def write_assignee_cells(self, sheet: str, rownum: int,
                              seen: str | None = None,
                              done: bool | None = None) -> None:
