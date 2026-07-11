@@ -101,6 +101,14 @@ class BrieferBot:
             return
         await self._reply(update, "Quick actions:", keyboard=menus.main_menu())
 
+    async def cmd_id(self, update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+        # No allow-list, no login: anyone can discover their chat id here.
+        chat = update.effective_chat
+        await update.effective_message.reply_text(
+            f"Your chat id: `{chat.id}`\nGive this to an admin to be added "
+            "(`/allow <id>`), then `/login <password>`.",
+            parse_mode=ParseMode.MARKDOWN)
+
     async def cmd_whoami(self, update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         chat = update.effective_chat
         user = update.effective_user
@@ -989,6 +997,11 @@ def _format_catch(result: Result) -> str:
         )
         parts.append(f"<i>⚠️ Unverified: {html.escape(shown)}</i>")
 
+    web = a.get("_web_sources") or []
+    if web:
+        parts.append("<i>🔎 Enriched & verified from " + str(len(web))
+                     + " web source(s).</i>")
+
     parts.append("<i>Saved to your Google Sheet.</i>")
     return "\n\n".join(parts)
 
@@ -1009,6 +1022,7 @@ BOT_COMMANDS = [
     ("allowlist", "Show allowed chats (admin)"),
     ("login", "Authenticate this chat"),
     ("logout", "End this chat's session"),
+    ("id", "Show your chat id (no login needed)"),
     ("whoami", "Show your chat id"),
     ("cancel", "Cancel the current action"),
 ]
@@ -1039,6 +1053,7 @@ def build_application(cfg: Config, bot: BrieferBot) -> Application:
     app.add_handler(CommandHandler("help", bot.cmd_help))
     app.add_handler(CommandHandler("menu", bot.cmd_menu))
     app.add_handler(CommandHandler("whoami", bot.cmd_whoami))
+    app.add_handler(CommandHandler("id", bot.cmd_id))
     app.add_handler(CommandHandler("login", bot.cmd_login))
     app.add_handler(CommandHandler("logout", bot.cmd_logout))
     app.add_handler(CommandHandler("allow", bot.cmd_allow))

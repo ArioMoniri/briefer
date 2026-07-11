@@ -170,6 +170,22 @@ class Enricher:
         log.warning("Too many redirects for %s", url)
         return None
 
+    def fetch_text(self, url: str, limit: int = 4000) -> str:
+        """Fetch a URL (SSRF-safe) and return readable text — used by the web
+        search enrichment to read candidate pages."""
+        try:
+            resp = self._fetch(url)
+        except Exception:  # noqa: BLE001
+            return ""
+        if not resp:
+            return ""
+        ctype = resp.headers.get("content-type", "")
+        if "application/pdf" in ctype:
+            return _pdf_to_text(resp.content)[:limit]
+        if "text/html" in ctype or "text/plain" in ctype or not ctype:
+            return self._extract_html_text(resp.text)[:limit]
+        return ""
+
     def _apply_links(self, html: str, base_url: str) -> list[str]:
         """Find apply/register/CTA links (e.g. 'Hemen Başvur', 'Apply', a Luma
         or Typeform/Eventbrite/Google-Forms link) — these are usually buttons

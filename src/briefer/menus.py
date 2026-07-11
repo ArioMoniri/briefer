@@ -50,6 +50,7 @@ HELP = (
     "/logs – recent logs / errors (admin)\n"
     "/login <password> – authenticate this chat\n"
     "/logout – end this chat's session\n"
+    "/id – show your chat id (no login needed)\n"
     "/whoami – show your chat id (for allow-listing)\n"
     "/cancel – cancel the current action\n\n"
     "*Admin commands*\n"

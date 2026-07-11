@@ -87,7 +87,8 @@ mkdir -p data data/logs data/downloads
 rand_pw() { ./.venv/bin/python -c "import secrets; print(secrets.token_urlsafe(18))"; }
 
 if [ -f .env ]; then
-  warn ".env already exists — keeping it. Delete it to re-run the wizard."
+  warn ".env already exists — keeping your values and filling any new settings."
+  ./.venv/bin/python configure.py || true
 else
   say "── Setup wizard ─────────────────────────────────────────────"
   echo "Press Enter to accept the [default]."

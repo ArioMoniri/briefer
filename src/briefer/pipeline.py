@@ -80,6 +80,17 @@ class Pipeline:
         if kind == "event" and not fresh.get("application_url") and content.apply_links:
             fresh["application_url"] = content.apply_links[0]
 
+        # General web-search enrichment: find MORE details, verified to be the
+        # same up-to-date item (not a similarly-named one).
+        if self.cfg.enable_web_search and not existing:
+            need_apply = kind == "event" and not fresh.get("application_url")
+            if (not self.cfg.web_search_only_if_apply_missing) or need_apply:
+                try:
+                    fresh = _augment_with_search(self.cfg, self.llm,
+                                                 self.enricher, fresh, kind)
+                except Exception as exc:  # noqa: BLE001
+                    log.warning("web-search enrichment failed: %s", exc)
+
         source = _source_label(content)
         images = _collect_images(content)
 
@@ -118,6 +129,74 @@ class Pipeline:
         return Result(kind=kind, analysis=fresh, source=source,
                       deadline_dt=deadline_dt, event_dt=event_dt,
                       event_all_day=all_day, sheet_row=row, entry_id=entry_id)
+
+
+def _augment_with_search(cfg, llm, enricher, fresh: dict[str, Any],
+                         kind: str) -> dict[str, Any]:
+    from . import web_search
+    from .link_safety import assess_link
+
+    query = analysis.web_search_query(kind, fresh)
+    if not query:
+        return fresh
+    results = web_search.search(query, cfg.web_search_max_results,
+                                cfg.web_search_provider, cfg.web_search_api_key)
+    candidates: list[dict[str, Any]] = []
+    for r in results:
+        url = r.get("url", "")
+        if not url:
+            continue
+        verdict = assess_link(
+            url, r.get("snippet", ""), llm=llm,
+            guard_model=cfg.link_guard_model,
+            safe_browsing_key=cfg.google_safe_browsing_key,
+            enable_guard=cfg.enable_link_guard)
+        if not verdict.safe:
+            continue
+        candidates.append({"url": url, "title": r.get("title", ""),
+                           "snippet": r.get("snippet", ""),
+                           "text": enricher.fetch_text(url)})
+        if len(candidates) >= 4:
+            break
+    if not candidates:
+        return fresh
+    verify = analysis.web_verify(llm, fresh, candidates, kind)
+    matched = [m.get("url") for m in (verify.get("matched_sources") or [])
+               if m.get("url")]
+    if not matched:
+        log.info("web search: no candidate matched the exact item")
+        return fresh
+    return _apply_web_details(fresh, verify, matched)
+
+
+def _apply_web_details(fresh: dict[str, Any], verify: dict[str, Any],
+                       matched: list[str]) -> dict[str, Any]:
+    add = verify.get("additional") or {}
+    for k in ("catch_points", "required_materials", "eligibility", "links"):
+        old = fresh.get(k) or []
+        old = [old] if isinstance(old, str) else list(old)
+        new = add.get(k) or []
+        new = [new] if isinstance(new, str) else list(new)
+        seen, union = set(), []
+        for item in old + new:
+            key = str(item).strip().lower()
+            if key and key not in seen:
+                seen.add(key)
+                union.append(item)
+        if union:
+            fresh[k] = union
+    for k in ("application_url", "application_deadline", "event_date"):
+        if not fresh.get(k) and add.get(k):
+            fresh[k] = add[k]
+    if add.get("summary_addendum"):
+        fresh["summary"] = (str(fresh.get("summary", "")) + " "
+                            + str(add["summary_addendum"])).strip()
+    fresh["links"] = list(dict.fromkeys((fresh.get("links") or []) + matched))
+    note = verify.get("up_to_date_note")
+    fresh["_web_sources"] = matched
+    if note:
+        fresh["_web_note"] = note
+    return fresh
 
 
 def _norm(s: Any) -> str:

@@ -104,6 +104,13 @@ class Config:
     link_guard_model: str
     google_safe_browsing_key: str
 
+    # Web search enrichment
+    enable_web_search: bool
+    web_search_provider: str
+    web_search_api_key: str
+    web_search_max_results: int
+    web_search_only_if_apply_missing: bool
+
     # Behaviour
     max_download_bytes: int
     rate_limit_per_minute: int
@@ -243,6 +250,13 @@ def load_config() -> Config:
         enable_link_guard=_get_bool("ENABLE_LINK_GUARD", True),
         link_guard_model=_get("LINK_GUARD_MODEL", "claude-haiku-4-5-20251001"),
         google_safe_browsing_key=_get("GOOGLE_SAFE_BROWSING_KEY", ""),
+        # General web-search enrichment (verified against the exact item).
+        enable_web_search=_get_bool("ENABLE_WEB_SEARCH", True),
+        web_search_provider=_get("WEB_SEARCH_PROVIDER", "ddg"),  # ddg|brave|serpapi
+        web_search_api_key=_get("WEB_SEARCH_API_KEY", ""),
+        web_search_max_results=_get_int("WEB_SEARCH_MAX_RESULTS", 5),
+        web_search_only_if_apply_missing=_get_bool(
+            "WEB_SEARCH_ONLY_IF_APPLY_MISSING", False),
         company_name=_get("COMPANY_NAME", "Vivax"),
         company_url=_get("COMPANY_URL", "https://getvivax.com"),
         company_focus=_get(

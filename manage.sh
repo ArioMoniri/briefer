@@ -98,10 +98,15 @@ update() {
   echo "Pulling latest code… (.env, token.json and data/ are preserved)"
   git pull --ff-only || echo "git pull skipped/failed"
   "$PIP" install -r requirements.txt
+  # Add any new settings introduced by the update (prompts if interactive).
+  [ -f "$APPDIR/.env" ] && "$PY" "$APPDIR/configure.py" || true
   restart
 }
 
 google_auth() { PYTHONPATH="$APPDIR/src" "$PY" "$APPDIR/authorize_google.py"; }
+
+# Fill in any missing/new config (prompts only for empty settings).
+reconfigure() { "$PY" "$APPDIR/configure.py"; }
 
 # Interactive login on the (headless) server via a virtual display + VNC.
 # You connect a VNC viewer through an SSH tunnel, log in, and the session is
@@ -170,7 +175,8 @@ case "$cmd" in
   refresh) refresh ;; reset) reset ;; status) status ;;
   logs) logs ;; errors) errors ;; attach) attach ;; foreground|fg) foreground ;; update) update ;;
   google-auth|gauth) google_auth ;;
+  reconfigure|configure) reconfigure ;;
   enable-browser) enable_browser ;;
   browser-login) browser_login ;;
-  *) echo "usage: $0 {start|stop|restart|refresh|reset|status|logs|errors|attach|foreground|update|google-auth|enable-browser|browser-login}"; exit 1 ;;
+  *) echo "usage: $0 {start|stop|restart|refresh|reset|status|logs|errors|attach|foreground|update|google-auth|reconfigure|enable-browser|browser-login}"; exit 1 ;;
 esac

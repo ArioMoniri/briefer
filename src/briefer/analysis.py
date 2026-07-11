@@ -170,6 +170,62 @@ def verify(llm: LLM, content: EnrichedContent, analysis: dict[str, Any],
     return result
 
 
+def web_search_query(kind: str, a: dict[str, Any]) -> str:
+    """Build a specific query so results are about THIS item, not a similar one."""
+    title = str(a.get("title", "")).strip()
+    if kind == "event":
+        bits = [title, str(a.get("organizer", "")), str(a.get("location", "")),
+                str(a.get("event_date", ""))[:4]]
+    else:
+        ents = a.get("entities") or []
+        bits = [title] + [str(e) for e in ents[:2]]
+    return " ".join(b for b in bits if b).strip()[:200]
+
+
+def web_verify(llm: LLM, original: dict[str, Any], candidates: list[dict],
+               kind: str) -> dict[str, Any]:
+    """Verify which candidate pages are about the SAME specific item and pull
+    only verified, up-to-date extra details from them."""
+    system = (
+        "You verify and enrich. You are given ORIGINAL key facts about a "
+        f"{kind} and several CANDIDATE web pages. For EACH candidate decide if "
+        "it is about the SAME specific item — same event on the same date and "
+        "organizer, or same article by the same author(s) — NOT a different, "
+        "similarly-named one. Be strict: if the date/organizer/author differ, "
+        "it does NOT match.\n"
+        "From the candidates you MATCH, produce consolidated, VERIFIED, "
+        "UP-TO-DATE additional details drawn ONLY from those pages. Prefer the "
+        "most recent information; if matched pages conflict, note it and keep "
+        "the most authoritative. Never invent facts.\n"
+        "Return STRICT JSON:\n"
+        '{\n'
+        '  "matched_sources": [{"url": "", "why": "how you confirmed it is the '
+        'same item"}],\n'
+        '  "additional": {"summary_addendum": "", "catch_points": [], '
+        '"application_url": "", "application_deadline": "", "event_date": "", '
+        '"required_materials": [], "eligibility": [], "links": []},\n'
+        '  "up_to_date_note": "note if anything looks outdated/changed",\n'
+        '  "confidence": 0-1\n'
+        '}\n'
+        "Leave a field empty/[] if not verified. matched_sources empty if none "
+        "clearly match."
+    )
+    cand_text = "\n\n".join(
+        f"[CANDIDATE {i+1}] {c.get('url')}\nTitle: {c.get('title','')}\n"
+        f"Snippet: {c.get('snippet','')}\nExcerpt: {str(c.get('text',''))[:2500]}"
+        for i, c in enumerate(candidates))
+    user = ("ORIGINAL FACTS:\n" + json.dumps(
+        {k: original.get(k) for k in
+         ("title", "organizer", "location", "event_date",
+          "application_deadline", "entities", "summary")},
+        ensure_ascii=False, indent=2)
+        + "\n\nCANDIDATES:\n" + cand_text)
+    out = llm.json(system, user, verify=True, max_tokens=1500)
+    out.setdefault("matched_sources", [])
+    out.setdefault("additional", {})
+    return out
+
+
 def apply_corrections(analysis: dict[str, Any], verification: dict[str, Any]
                       ) -> dict[str, Any]:
     """Merge verifier corrections into the analysis and attach a verdict."""
