@@ -170,7 +170,31 @@ def build_html(items: list[CalItem]) -> str:
         "sheet": it.sheet,
     } for it in items]
     data = json.dumps(events, ensure_ascii=False)
-    return _HTML_TEMPLATE.replace("/*__EVENTS__*/", data)
+    static = _static_agenda(items)
+    return (_HTML_TEMPLATE
+            .replace("/*__EVENTS__*/", data)
+            .replace("<!--__STATIC__-->", static))
+
+
+def _static_agenda(items: list[CalItem]) -> str:
+    """A plain-HTML agenda rendered server-side, so the events are visible even
+    where JavaScript is off (e.g. macOS Quick Look). The interactive calendar
+    replaces this the moment the page runs in a real browser."""
+    if not items:
+        return ('<div class="hint">No dated items yet — add an event or a '
+                'deadline (or a Remind At date in the sheet) and it appears '
+                'here.</div>')
+    rows = ['<div class="list">']
+    for it in sorted(items, key=lambda x: x.when):
+        t = it.when.strftime("%H:%M")
+        when = it.when.strftime("%Y-%m-%d") + ("" if t == "00:00" else f" {t}")
+        tag = f" · {it.sheet}" if it.sheet else ""
+        rows.append(
+            f'<div class="row"><span class="d">{when}</span>'
+            f'<span><span class="dot {it.kind}"></span>'
+            f'{html.escape(it.title[:70])}{tag}</span></div>')
+    rows.append("</div>")
+    return "\n".join(rows)
 
 
 # Pure-JS calendar. No external requests (CSP-safe / works offline).
@@ -231,7 +255,9 @@ white-space:nowrap;overflow:hidden;text-overflow:ellipsis;cursor:default}
 <div class="legend"><span><span class="dot deadline"></span>Deadline</span>
 <span><span class="dot event"></span>Event date</span>
 <span><span class="dot reminder"></span>Reminder</span></div>
-<div id="root" class="wrap"></div>
+<div id="root" class="wrap"><!--__STATIC__--></div>
+<noscript><div class="hint">Open this file in a web browser (not Quick Look)
+for the interactive Month / Week / Day / Year views.</div></noscript>
 <script>
 const EVENTS = /*__EVENTS__*/;
 const byDate = {};
