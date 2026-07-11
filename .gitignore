@@ -1,0 +1,31 @@
+# Secrets & runtime state — NEVER commit these
+.env
+*.env
+!.env.example
+credentials.json
+service_account.json
+*.key
+*.pem
+
+# Runtime data
+data/
+*.db
+*.sqlite
+*.sqlite3
+downloads/
+logs/
+*.log
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+env/
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+
+# OS
+.DS_Store
+Thumbs.db
