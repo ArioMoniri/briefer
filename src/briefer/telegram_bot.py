@@ -366,33 +366,27 @@ class BrieferBot:
         await self._reply(update, "\n".join(lines), parse_mode=ParseMode.HTML)
 
     async def cmd_calendar(self, update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
-        """A calendar-style view of all upcoming reminders, grouped by day."""
+        """A real month-grid calendar of every dated item (article deadlines,
+        event dates & deadlines, custom reminders), with ◀/▶ navigation."""
         if not await self._require_auth(update):
             return
-        now = time.time()
-        rem = self.store.upcoming_reminders(
-            update.effective_chat.id, now, 365 * 86400)
-        if not rem:
-            await self._reply(update, "🗓 No upcoming reminders. Set one by "
-                              "replying `remind me <when>`, or add a deadline/"
-                              "event, or fill the sheet's *Remind At* column.")
-            return
-        rem.sort(key=lambda r: r["fire_at"])
-        icons = {"deadline": "⏰", "event_date": "📅", "custom": "🔔"}
-        by_day: dict[str, list[str]] = {}
-        for r in rem[:60]:
-            dt = datetime.fromtimestamp(r["fire_at"])
-            day = dt.strftime("%a %Y-%m-%d")
-            kind = (r["payload"] or {}).get("kind", "custom")
-            label = (r["payload"] or {}).get("title", r["title"])
-            line = (f"  • {dt.strftime('%H:%M')} {icons.get(kind, '🔔')} "
-                    f"{html.escape(str(label)[:60])}")
-            by_day.setdefault(day, []).append(line)
-        out = ["🗓 <b>Upcoming reminders</b>"]
-        for day, lines in by_day.items():
-            out.append(f"\n<b>{day}</b>")
-            out.extend(lines)
-        await self._reply(update, "\n".join(out), parse_mode=ParseMode.HTML)
+        from . import calendar_view
+        today = datetime.now()
+        items = calendar_view.collect_items(self.store, update.effective_chat.id)
+        text, kb = calendar_view.render(items, today.year, today.month, today)
+        await self._reply(update, text, parse_mode=ParseMode.HTML, keyboard=kb)
+
+    async def _show_calendar_month(self, q, chat_id: int, year: int,
+                                   month: int) -> None:
+        from . import calendar_view
+        today = datetime.now()
+        items = calendar_view.collect_items(self.store, chat_id)
+        text, kb = calendar_view.render(items, year, month, today)
+        try:
+            await q.message.edit_text(text, parse_mode=ParseMode.HTML,
+                                      reply_markup=kb)
+        except Exception:  # noqa: BLE001 — e.g. "message not modified"
+            pass
 
     async def cmd_cancel(self, update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         ctx.user_data.pop("force_kind", None)
@@ -432,6 +426,35 @@ class BrieferBot:
             await self.cmd_deadlines(update, ctx)
         elif data == "act:status":
             await self.cmd_status(update, ctx)
+        elif data == "cal:today":
+            now = datetime.now()
+            await self._show_calendar_month(q, chat_id, now.year, now.month)
+        elif data == "cal:html":
+            await self._send_calendar_html(q, chat_id)
+        elif data.startswith("cal:"):
+            try:
+                y, m = data.split(":", 1)[1].split("-")
+                await self._show_calendar_month(q, chat_id, int(y), int(m))
+            except (ValueError, IndexError):
+                pass
+
+    async def _send_calendar_html(self, q, chat_id: int) -> None:
+        """Generate the interactive HTML calendar and send it as a file."""
+        import io
+        from . import calendar_view
+        items = calendar_view.collect_items(self.store, chat_id)
+        if not items:
+            await q.message.reply_text(
+                "No dated items yet — add an event or an article with a "
+                "deadline and it'll appear here.")
+            return
+        html_doc = calendar_view.build_html(items)
+        buf = io.BytesIO(html_doc.encode("utf-8"))
+        buf.name = "briefer-calendar.html"
+        await q.message.reply_document(
+            document=buf, filename="briefer-calendar.html",
+            caption="🌐 Open this in a browser — Month / Week / Day / Year / "
+                    "List views, with navigation.")
 
     # ------------------------------------------------------------------
     # Message ingestion

@@ -231,6 +231,28 @@ def test_merge_dedups_reworded_bullets_and_keeps_good_scalars():
     assert again["catch_points"] == merged["catch_points"] and changed2 is False
 
 
+def test_calendar_shows_deadlines_and_events_not_reminder_pokes():
+    """The calendar is built from entries (one deadline + one event date each),
+    never from the 72h/24h/3h reminder rows."""
+    import tempfile
+    from briefer.storage import Store
+    from briefer import calendar_view
+    s = Store(tempfile.mktemp())
+    s.add_entry("e1", 7, "event", "fp1", "Simya Demo Day",
+                {"title": "Simya Demo Day",
+                 "application_deadline": "2026-09-03",
+                 "event_date": "2026-11-03T21:00"}, "event|simya|2026-11-03")
+    # A reminder poke that must NOT appear as its own calendar item.
+    s.add_reminder(7, 1.0e9, "Simya Demo Day",
+                   {"kind": "deadline", "title": "Simya Demo Day"}, entry_id="e1")
+    items = calendar_view.collect_items(s, 7)
+    kinds = sorted((it.kind, it.when.strftime("%Y-%m-%d")) for it in items)
+    assert kinds == [("deadline", "2026-09-03"), ("event", "2026-11-03")]
+    html_doc = calendar_view.build_html(items)
+    assert "Simya Demo Day" in html_doc and html_doc.count('"kind"') == 2
+    s.close()
+
+
 def test_exact_resend_does_not_reanalyse_or_bloat():
     """Byte-identical re-send whose row still exists returns updated/unchanged
     WITHOUT re-running the LLM or rewriting the row (was ballooning cells)."""
