@@ -97,6 +97,13 @@ class Config:
     browser_profile_dir: str
     browser_storage_state: str
 
+    # Nested-link safety
+    follow_nested_links: bool
+    max_nested_links: int
+    enable_link_guard: bool
+    link_guard_model: str
+    google_safe_browsing_key: str
+
     # Behaviour
     max_download_bytes: int
     rate_limit_per_minute: int
@@ -229,6 +236,13 @@ def load_config() -> Config:
         # and every render stays logged in. Empty string disables.
         browser_profile_dir=_get("BROWSER_PROFILE_DIR", "browser_profile"),
         browser_storage_state=_get("BROWSER_STORAGE_STATE", "storage_state.json"),
+        # Follow links found INSIDE a post to their article — after a safety
+        # gate (SSRF + heuristics + optional Safe Browsing + a cheap guard LLM).
+        follow_nested_links=_get_bool("FOLLOW_NESTED_LINKS", True),
+        max_nested_links=_get_int("MAX_NESTED_LINKS", 3),
+        enable_link_guard=_get_bool("ENABLE_LINK_GUARD", True),
+        link_guard_model=_get("LINK_GUARD_MODEL", "claude-haiku-4-5-20251001"),
+        google_safe_browsing_key=_get("GOOGLE_SAFE_BROWSING_KEY", ""),
         company_name=_get("COMPANY_NAME", "Vivax"),
         company_url=_get("COMPANY_URL", "https://getvivax.com"),
         company_focus=_get(

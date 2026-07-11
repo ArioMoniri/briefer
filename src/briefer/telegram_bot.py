@@ -222,16 +222,17 @@ class BrieferBot:
         evt_row = self.store.get_meta("event_last_row", "?")
         await self._reply(
             update,
-            "💚 *Status*\n"
+            "💚 <b>Status</b>\n"
             f"Uptime: {up}\n"
             f"Queue: {queued} waiting · processed: {done} · last: {when}\n"
             f"Last row — Articles: {art_row}, Events: {evt_row}\n"
-            f"Model: `{self.cfg.model}` / verify `{self.cfg.verify_model}`\n"
+            f"Model: <code>{html.escape(self.cfg.model)}</code> / verify "
+            f"<code>{html.escape(self.cfg.verify_model)}</code>\n"
             f"Transcription: {media} · keyframes: {self.cfg.video_keyframes}\n"
             f"Reminder lead times: {self.cfg.deadline_reminder_hours} h\n"
-            f"📄 Articles: https://docs.google.com/spreadsheets/d/{a}\n"
-            f"📅 Events: https://docs.google.com/spreadsheets/d/{e}",
-            preview=True,
+            f"📄 Articles: https://docs.google.com/spreadsheets/d/{html.escape(a)}\n"
+            f"📅 Events: https://docs.google.com/spreadsheets/d/{html.escape(e)}",
+            preview=True, parse_mode=ParseMode.HTML,
         )
 
     async def cmd_logs(self, update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
@@ -275,12 +276,13 @@ class BrieferBot:
             return
         a = self.pipeline.sheets.articles_id
         e = self.pipeline.sheets.events_id
+        # HTML, not Markdown: sheet IDs can contain '_' which breaks Markdown.
         await self._reply(
             update,
-            "🗂 *Your sheets*\n"
-            f"📄 Articles: https://docs.google.com/spreadsheets/d/{a}\n"
-            f"📅 Events: https://docs.google.com/spreadsheets/d/{e}",
-            preview=True,
+            "🗂 <b>Your sheets</b>\n"
+            f"📄 Articles: https://docs.google.com/spreadsheets/d/{html.escape(a)}\n"
+            f"📅 Events: https://docs.google.com/spreadsheets/d/{html.escape(e)}",
+            preview=True, parse_mode=ParseMode.HTML,
         )
 
     async def cmd_deadlines(self, update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:

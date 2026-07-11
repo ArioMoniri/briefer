@@ -71,7 +71,13 @@ def main() -> int:
                         enable_browser=cfg.enable_browser_fallback,
                         cookies_file=cookies,
                         browser_profile_dir=cfg.browser_profile_path,
-                        browser_storage_state=cfg.browser_storage_state_path)
+                        browser_storage_state=cfg.browser_storage_state_path,
+                        llm=llm,
+                        follow_nested_links=cfg.follow_nested_links,
+                        max_nested_links=cfg.max_nested_links,
+                        enable_link_guard=cfg.enable_link_guard,
+                        link_guard_model=cfg.link_guard_model,
+                        safe_browsing_key=cfg.google_safe_browsing_key)
     if cfg.browser_profile_path:
         log.info("Using persistent browser profile: %s", cfg.browser_profile_path)
     # Reuse previously auto-created sheets so restarts don't spawn new empty

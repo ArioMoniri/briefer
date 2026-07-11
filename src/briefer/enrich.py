@@ -82,7 +82,10 @@ class Enricher:
                  transcriber=None, enable_gallery_dl: bool = True,
                  gallery_max_images: int = 6, enable_browser: bool = False,
                  cookies_file: str = "", browser_profile_dir: str = "",
-                 browser_storage_state: str = "") -> None:
+                 browser_storage_state: str = "", llm=None,
+                 follow_nested_links: bool = False, max_nested_links: int = 3,
+                 enable_link_guard: bool = True, link_guard_model: str = "",
+                 safe_browsing_key: str = "") -> None:
         self.max_bytes = max_bytes
         self.tweets = tweet_extractor
         self.transcriber = transcriber
@@ -92,6 +95,12 @@ class Enricher:
         self.cookies_file = cookies_file
         self.browser_profile_dir = browser_profile_dir
         self.browser_storage_state = browser_storage_state
+        self.llm = llm
+        self.follow_nested_links = follow_nested_links
+        self.max_nested_links = max_nested_links
+        self.enable_link_guard = enable_link_guard
+        self.link_guard_model = link_guard_model
+        self.safe_browsing_key = safe_browsing_key
 
     def _try_gallery(self, url: str, content: EnrichedContent) -> int:
         """Fallback downloader for image posts → vision. Returns #images."""
@@ -296,7 +305,62 @@ class Enricher:
                 # One problematic link must never sink the whole analysis.
                 log.warning("enrich failed for %s: %s", url, exc)
                 content.notes.append(f"Could not process {url}: {exc}")
+
+        if self.follow_nested_links:
+            try:
+                self._follow_nested_links(content)
+            except Exception as exc:  # noqa: BLE001
+                log.warning("nested-link follow failed: %s", exc)
         return content
+
+    def _follow_nested_links(self, content: EnrichedContent) -> None:
+        """Find links INSIDE the fetched content (e.g. an article linked from a
+        post), safety-check each, and fetch the safe ones one level deep."""
+        from .link_safety import assess_link, is_probably_article
+
+        # Everything we already have text for / already handled.
+        known = set(content.urls) | set(content.link_texts.keys())
+        primary_hosts = {urlparse(u).hostname or "" for u in content.urls}
+
+        # Scan the extracted texts (not the user's own message) for new links.
+        corpus = "\n".join(content.link_texts.values())
+        candidates: list[str] = []
+        for u in dict.fromkeys(URL_RE.findall(corpus)):
+            u = u.rstrip(").,]\"'")
+            if u in known or u in candidates:
+                continue
+            if TWEET_RE.match(u) or VIDEO_HOST_RE.match(u) or _GITHUB_RE.match(u):
+                continue
+            if is_probably_article(u, primary_hosts):
+                candidates.append(u)
+
+        for url in candidates[: self.max_nested_links]:
+            ctx = _snippet_around(corpus, url)
+            verdict = assess_link(
+                url, ctx, llm=self.llm, guard_model=self.link_guard_model,
+                safe_browsing_key=self.safe_browsing_key,
+                enable_guard=self.enable_link_guard)
+            if not verdict.safe:
+                content.notes.append(
+                    f"⚠️ Skipped linked page (unsafe): {url} — {verdict.reason}")
+                continue
+            if not verdict.fetch:  # safe but judged irrelevant
+                content.notes.append(f"Linked page skipped (not relevant): {url}")
+                continue
+            resp = self._fetch(url)
+            if not resp:
+                rendered = self._browser_render(url)
+                if rendered:
+                    content.link_texts[url] = "[followed linked article]\n" + rendered
+                continue
+            ctype = resp.headers.get("content-type", "")
+            if "application/pdf" in ctype:
+                content.link_texts[url] = "[followed linked article]\n" + _pdf_to_text(resp.content)
+            elif "text/html" in ctype or "text/plain" in ctype or not ctype:
+                content.link_texts[url] = "[followed linked article]\n" + self._extract_html_text(resp.text)
+            content.notes.append(
+                f"✅ Followed linked article (safety ok): {url}"
+                + (f" [{verdict.category}]" if verdict.category else ""))
 
     def _handle_url(self, url: str, content: EnrichedContent) -> None:
         if _LUMA_RE.match(url):
@@ -351,6 +415,14 @@ class Enricher:
         except Exception as exc:  # noqa: BLE001
             log.warning("browser fallback error for %s: %s", url, exc)
             return ""
+
+
+def _snippet_around(text: str, needle: str, span: int = 400) -> str:
+    i = text.find(needle)
+    if i == -1:
+        return text[:span]
+    start = max(0, i - span // 2)
+    return text[start:start + span]
 
 
 def _pdf_to_text(data: bytes) -> str:

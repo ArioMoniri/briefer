@@ -121,16 +121,24 @@ browser_login() {
       *) echo "Install xvfb and x11vnc manually, then re-run."; exit 1 ;;
     esac
   fi
+  # A VNC password is REQUIRED — macOS Screen Sharing hangs on no-auth VNC.
+  local vpass="${VNC_PASSWORD:-briefer}"
   Xvfb :99 -screen 0 1360x900x24 >/dev/null 2>&1 &
   local xvfb=$!
   sleep 2
-  x11vnc -display :99 -localhost -rfbport 5900 -nopw -forever -quiet >/dev/null 2>&1 &
+  x11vnc -display :99 -localhost -rfbport 5900 -passwd "$vpass" \
+    -forever -shared -quiet >/dev/null 2>&1 &
   local vnc=$!
+  sleep 1
+  if ! kill -0 "$vnc" 2>/dev/null; then
+    echo "x11vnc failed to start. Is it installed? Try: which x11vnc"; kill "$xvfb" 2>/dev/null; return 1
+  fi
   echo
   echo "──────────────────────────────────────────────────────────────"
   echo " 1) On YOUR computer, open an SSH tunnel to this server:"
   echo "      ssh -L 5900:localhost:5900 <you>@<this-server>"
   echo " 2) Open a VNC viewer and connect to:  localhost:5900"
+  echo "      VNC password:  $vpass   ← type THIS (not your Mac/server password)"
   echo " 3) In the browser window, log in to LinkedIn / Instagram / etc."
   echo " 4) Come BACK HERE and press Enter to save the session."
   echo "──────────────────────────────────────────────────────────────"

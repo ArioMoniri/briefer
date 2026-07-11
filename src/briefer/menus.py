@@ -69,7 +69,9 @@ HELP = (
     "*Privacy & security*\n"
     "Only allow-listed chat ids that have /login-ed can talk to me. I never "
     "run anything from your messages; links are fetched through an SSRF "
-    "filter; secrets stay on the server."
+    "filter; secrets stay on the server. Links *inside* a post are safety-"
+    "checked (heuristics + a guard model, and Google Safe Browsing if "
+    "configured) before I ever open them."
 )
 
 

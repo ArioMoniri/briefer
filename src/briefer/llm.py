@@ -60,9 +60,10 @@ class LLM:
 
     def json(self, system: str, user: str, *, verify: bool = False,
              images: list[dict[str, str]] | None = None,
+             model: str | None = None,
              max_tokens: int = 2000) -> dict[str, Any]:
-        model = self.verify_model if verify else self.model
-        raw = self._call(model, system, user, images=images, max_tokens=max_tokens)
+        chosen = model or (self.verify_model if verify else self.model)
+        raw = self._call(chosen, system, user, images=images, max_tokens=max_tokens)
         return _extract_json(raw)
 
 

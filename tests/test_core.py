@@ -296,6 +296,36 @@ def test_og_meta_extraction():
     assert "The real post text here" in e._extract_html_text(html)
 
 
+def test_link_safety_gate():
+    from briefer.link_safety import heuristic_flags, is_probably_article, assess_link
+    # hard fails
+    assert heuristic_flags("http://user:pass@evil.com/")[0] is False
+    # soft flags but not hard-fail
+    ok, flags = heuristic_flags("https://bit.ly/x")
+    assert ok and "URL shortener" in flags
+    assert heuristic_flags("https://nature.com/articles/s1")[1] == []
+    # article pre-filter
+    assert is_probably_article("https://site.com/a/deep-post", set())
+    assert not is_probably_article("https://site.com/logo.png", set())
+    assert not is_probably_article("https://x.com/", {"x.com"})
+
+    class SafeLLM:
+        def json(self, s, u, *, model=None, max_tokens=2000, **k):
+            return {"safe": True, "relevant": True, "category": "news"}
+
+    class BadLLM:
+        def json(self, s, u, *, model=None, max_tokens=2000, **k):
+            return {"safe": False, "reason": "phishing"}
+
+    # A public, resolvable host passes SSRF; the guard verdict then decides.
+    v = assess_link("https://example.com/article", "ctx", llm=SafeLLM(),
+                    guard_model="g")
+    assert v.safe and v.fetch
+    v2 = assess_link("https://example.com/verify", "ctx", llm=BadLLM(),
+                     guard_model="g")
+    assert not v2.safe and not v2.fetch
+
+
 def test_guess_media_type():
     from briefer.media import guess_media_type
     assert guess_media_type(b"\xff\xd8\xff\xe0xx") == "image/jpeg"
