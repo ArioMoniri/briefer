@@ -101,20 +101,32 @@ class Pipeline:
             existing = self.store.entry_by_key(dedup_key)
 
         if existing:
-            # Cumulatively merge new info into the SAME row instead of skipping.
-            merged, changed = _merge_analysis(existing["analysis"], fresh)
             row = self.sheets.find_row_by_id(existing["sheet"], existing["id"])
-            if row and changed:
-                self.sheets.update_data_row(existing["sheet"], row, merged,
-                                            source, submitted_by, images)
-            self.store.update_entry_analysis(existing["id"], merged,
-                                             str(merged.get("title", "")))
-            dl = _parse_deadline(merged.get("application_deadline"))
-            ev, all_day = _parse_event_date(merged.get("event_date"))
-            return Result(kind=existing["sheet"], analysis=merged, source=source,
-                          deadline_dt=dl, event_dt=ev, event_all_day=all_day,
-                          sheet_row=row, entry_id=existing["id"],
-                          updated=True, changed=changed)
+            if row is None:
+                # The row was deleted from the sheet — don't silently update a
+                # ghost. Keep the previously-analysed (rich) data by merging it
+                # in, retire the old entry, and fall through to a fresh row.
+                log.info("Entry %s row missing from sheet — creating a new one",
+                         existing["id"])
+                fresh, _ = _merge_analysis(existing["analysis"], fresh)
+                dedup_key = _dedup_key(kind, fresh)
+                self.store.mark_entry_removed(existing["id"])
+                existing = None
+            else:
+                # Cumulatively merge new info into the SAME row.
+                merged, changed = _merge_analysis(existing["analysis"], fresh)
+                if changed:
+                    self.sheets.update_data_row(existing["sheet"], row, merged,
+                                                source, submitted_by, images)
+                self.store.update_entry_analysis(existing["id"], merged,
+                                                 str(merged.get("title", "")))
+                dl = _parse_deadline(merged.get("application_deadline"))
+                ev, all_day = _parse_event_date(merged.get("event_date"))
+                return Result(kind=existing["sheet"], analysis=merged,
+                              source=source, deadline_dt=dl, event_dt=ev,
+                              event_all_day=all_day, sheet_row=row,
+                              entry_id=existing["id"], updated=True,
+                              changed=changed)
 
         entry_id = uuid.uuid4().hex[:12]
         deadline_dt = _parse_deadline(fresh.get("application_deadline"))
