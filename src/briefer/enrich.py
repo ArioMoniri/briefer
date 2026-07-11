@@ -9,14 +9,16 @@ from __future__ import annotations
 import base64
 import io
 import logging
+import os
 import re
 from dataclasses import dataclass, field
 from typing import Any
+from urllib.parse import urljoin, urlparse, urlunparse
 
 import httpx
 from bs4 import BeautifulSoup
 
-from .security import is_safe_url, clamp
+from .security import safe_resolve, clamp
 
 log = logging.getLogger("briefer.enrich")
 
@@ -76,30 +78,58 @@ class EnrichedContent:
 class Enricher:
     def __init__(self, max_bytes: int) -> None:
         self.max_bytes = max_bytes
+        # If egress goes through an HTTP proxy, the proxy owns DNS + policy, so
+        # IP-pinning is both unnecessary and can break the proxy tunnel. Only
+        # pin on direct egress, where DNS-rebinding is a real concern.
+        self._proxied = bool(
+            os.environ.get("HTTPS_PROXY") or os.environ.get("https_proxy")
+            or os.environ.get("ALL_PROXY") or os.environ.get("all_proxy")
+        )
 
     def _fetch(self, url: str) -> httpx.Response | None:
-        ok, reason = is_safe_url(url)
-        if not ok:
-            log.warning("Refusing to fetch %s: %s", url, reason)
-            return None
+        # Follow redirects manually so EVERY hop is validated with the SSRF
+        # guard *before* a socket is opened. On direct egress we additionally
+        # connect to a PINNED IP so a DNS-rebinding host can't resolve to a
+        # public IP during validation and to 169.254.169.254 / 127.0.0.1
+        # during the actual connect.
+        current = url
         try:
-            with httpx.Client(timeout=15, follow_redirects=True,
-                              headers=_HEADERS, max_redirects=4) as client:
-                resp = client.get(url)
+            with httpx.Client(timeout=15, follow_redirects=False,
+                              headers=_HEADERS, trust_env=True) as client:
+                for _ in range(5):
+                    ok, reason, ip = safe_resolve(current)
+                    if not ok or not ip:
+                        log.warning("Refusing to fetch %s: %s", current, reason)
+                        return None
+                    if self._proxied:
+                        resp = client.get(current)
+                    else:
+                        parsed = urlparse(current)
+                        host = parsed.hostname or ""
+                        ip_host = f"[{ip}]" if ":" in ip else ip
+                        netloc = ip_host + (f":{parsed.port}" if parsed.port else "")
+                        ip_url = urlunparse(parsed._replace(netloc=netloc))
+                        resp = client.get(
+                            ip_url,
+                            headers={"Host": host},
+                            extensions={"sni_hostname": host},
+                        )
+                    if resp.is_redirect:
+                        loc = resp.headers.get("location")
+                        if not loc:
+                            return None
+                        current = urljoin(current, loc)
+                        continue
+                    if len(resp.content) > self.max_bytes:
+                        log.warning("Body too large for %s (%d bytes)",
+                                    current, len(resp.content))
+                        return None
+                    return resp
         except Exception as exc:  # noqa: BLE001
             log.warning("Fetch failed for %s: %s", url, exc)
             return None
-        # Re-validate the final URL after redirects (defends against
-        # redirect-to-internal SSRF).
-        final = str(resp.url)
-        ok, reason = is_safe_url(final)
-        if not ok:
-            log.warning("Refusing redirected URL %s: %s", final, reason)
-            return None
-        if len(resp.content) > self.max_bytes:
-            log.warning("Body too large for %s (%d bytes)", url, len(resp.content))
-            return None
-        return resp
+        log.warning("Too many redirects for %s", url)
+        return None
 
     def _extract_html_text(self, html: str) -> str:
         soup = BeautifulSoup(html, "html.parser")

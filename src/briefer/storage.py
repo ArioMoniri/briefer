@@ -109,6 +109,22 @@ class Store:
             for r in rows
         ]
 
+    def upcoming_reminders(self, chat_id: int, now: float,
+                           horizon: float) -> list[dict[str, Any]]:
+        """Not-yet-fired reminders for ONE chat within [now, now+horizon]."""
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT id, chat_id, fire_at, title, payload FROM reminders "
+                "WHERE chat_id = ? AND fired = 0 AND fire_at >= ? AND fire_at <= ? "
+                "ORDER BY fire_at",
+                (chat_id, now, now + horizon),
+            ).fetchall()
+        return [
+            {"id": r[0], "chat_id": r[1], "fire_at": r[2],
+             "title": r[3], "payload": json.loads(r[4] or "{}")}
+            for r in rows
+        ]
+
     def mark_reminder_fired(self, reminder_id: int) -> None:
         with self._lock:
             self._conn.execute(

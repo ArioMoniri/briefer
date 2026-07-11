@@ -111,7 +111,9 @@ class SheetsClient:
             _fmt(a.get("confidence")),
             _fmt(user),
         ]
-        self._articles.append_row(row, value_input_option="USER_ENTERED")
+        # RAW (not USER_ENTERED): untrusted content must never be parsed as a
+        # formula (=IMPORTXML/HYPERLINK exfiltration). RAW stores it verbatim.
+        self._articles.append_row(row, value_input_option="RAW")
 
     def append_event(self, e: dict[str, Any], source: str, user: str) -> None:
         now = datetime.now(timezone.utc).astimezone().isoformat(timespec="seconds")
@@ -140,4 +142,4 @@ class SheetsClient:
             _fmt(source),
             _fmt(user),
         ]
-        self._events.append_row(row, value_input_option="USER_ENTERED")
+        self._events.append_row(row, value_input_option="RAW")

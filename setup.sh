@@ -148,10 +148,24 @@ EOF
   echo "Your login password is: $LOGIN_PW"
 fi
 
-# --- 4. ownership ----------------------------------------------------
+# --- 4. ownership (least privilege) ---------------------------------
+# The service user must NOT be able to modify code/scripts, otherwise a
+# compromise of the bot could rewrite a script that root's cron watchdog
+# later executes (local privilege escalation). So: code stays root-owned
+# and non-writable by the service user; only data/ is writable; .env is
+# group-readable by the service user but not writable.
 if [ "$IS_ROOT" -eq 1 ]; then
-  chown -R "$RUN_USER":"$RUN_USER" "$SCRIPT_DIR"
-  chmod 600 .env 2>/dev/null || true
+  chown -R root:root "$SCRIPT_DIR"
+  chmod -R go-w "$SCRIPT_DIR"                 # nobody but root may write code
+  chmod 755 manage.sh setup.sh deploy/healthcheck.sh 2>/dev/null || true
+  # Writable runtime state for the service user only.
+  mkdir -p "$SCRIPT_DIR/data"
+  chown -R "$RUN_USER":"$RUN_USER" "$SCRIPT_DIR/data"
+  # Secrets: readable (not writable) by the service user via its group.
+  chown "root:$RUN_USER" .env 2>/dev/null || true
+  chmod 640 .env 2>/dev/null || true
+  # Service account key, if present, same treatment.
+  [ -f service_account.json ] && { chown "root:$RUN_USER" service_account.json; chmod 640 service_account.json; }
 fi
 
 # --- 5. systemd service (self-healing) ------------------------------

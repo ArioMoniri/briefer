@@ -74,32 +74,52 @@ def _is_public_ip(ip: str) -> bool:
     )
 
 
-def is_safe_url(url: str) -> tuple[bool, str]:
-    """Return (ok, reason). Resolves the host and rejects private targets."""
+def safe_resolve(url: str) -> tuple[bool, str, str | None]:
+    """Validate a URL and resolve it to a single pinned public IP.
+
+    Returns (ok, reason, ip). The caller MUST connect to `ip` directly
+    (not re-resolve the hostname) to avoid a DNS-rebinding TOCTOU: we do
+    exactly one resolution here and hand back the concrete address.
+    """
     try:
         parsed = urlparse(url)
     except Exception:
-        return False, "unparseable URL"
+        return False, "unparseable URL", None
     if parsed.scheme not in _ALLOWED_SCHEMES:
-        return False, f"scheme '{parsed.scheme}' not allowed"
+        return False, f"scheme '{parsed.scheme}' not allowed", None
     host = parsed.hostname
     if not host:
-        return False, "no host"
+        return False, "no host", None
+    # Only allow the standard web ports; block SSRF to services on odd ports.
+    if parsed.port is not None and parsed.port not in (80, 443):
+        return False, f"port {parsed.port} not allowed", None
     # Reject obvious internal names outright.
     lowered = host.lower()
     if lowered in {"localhost", "metadata.google.internal"} or lowered.endswith(
         (".local", ".internal")
     ):
-        return False, "internal hostname"
+        return False, "internal hostname", None
+    port = parsed.port or (443 if parsed.scheme == "https" else 80)
     try:
-        infos = socket.getaddrinfo(host, parsed.port or 443, proto=socket.IPPROTO_TCP)
+        infos = socket.getaddrinfo(host, port, proto=socket.IPPROTO_TCP)
     except socket.gaierror:
-        return False, "DNS resolution failed"
+        return False, "DNS resolution failed", None
+    pinned: str | None = None
     for info in infos:
         ip = info[4][0]
         if not _is_public_ip(ip):
-            return False, f"resolves to non-public address {ip}"
-    return True, "ok"
+            return False, f"resolves to non-public address {ip}", None
+        if pinned is None:
+            pinned = ip
+    if pinned is None:
+        return False, "no address", None
+    return True, "ok", pinned
+
+
+def is_safe_url(url: str) -> tuple[bool, str]:
+    """Return (ok, reason). Resolves the host and rejects private targets."""
+    ok, reason, _ = safe_resolve(url)
+    return ok, reason
 
 
 # ---------------------------------------------------------------------------

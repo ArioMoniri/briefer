@@ -84,6 +84,11 @@ class BrieferBot:
 
     async def cmd_whoami(self, update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         chat = update.effective_chat
+        # Only reveal ids/access state in bootstrap discovery mode or to
+        # already-allowlisted chats. Strangers are ignored like everywhere else.
+        if not self.cfg.bootstrap and not self._allowed(chat.id):
+            log.warning("Ignoring /whoami from non-allowlisted id=%s", chat.id)
+            return
         user = update.effective_user
         await self._reply(
             update,
@@ -155,9 +160,9 @@ class BrieferBot:
         if not await self._require_auth(update):
             return
         now = time.time()
-        rem = [r for r in self.store.due_reminders(now + 3650 * 86400)
-               if r["fire_at"] >= now]
-        rem.sort(key=lambda r: r["fire_at"])
+        # Scope to THIS chat only — never reveal other chats' deadlines.
+        rem = self.store.upcoming_reminders(
+            update.effective_chat.id, now, 3650 * 86400)
         if not rem:
             await self._reply(update, "No upcoming deadlines are being tracked.")
             return
@@ -210,9 +215,12 @@ class BrieferBot:
     # Message ingestion
     # ------------------------------------------------------------------
     async def on_message(self, update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+        # _gate already applied the allow-list + rate limit (one token). Do an
+        # auth-only check here so a message doesn't burn two rate-limit tokens.
         if not await self._gate(update):
             return
-        if not await self._require_auth(update):
+        if not self._authed(update.effective_chat.id):
+            await self._reply(update, "🔒 Please `/login <password>` first.")
             return
         msg = update.message
         text = (msg.text or msg.caption or "")[:MAX_TEXT]

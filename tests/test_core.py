@@ -26,6 +26,14 @@ def test_ssrf_blocks_private_and_metadata():
     assert is_safe_url("https://example.com/")[0] is True
 
 
+def test_ssrf_rejects_odd_ports_and_pins_public_ip():
+    from briefer.security import safe_resolve
+    assert is_safe_url("http://example.com:8080/")[0] is False
+    assert is_safe_url("https://example.com:22/")[0] is False
+    ok, _reason, ip = safe_resolve("https://example.com/")
+    assert ok and ip  # returns a concrete pinned public IP
+
+
 def test_password_roundtrip():
     salt, h = hash_password("hunter2")
     assert verify_password("hunter2", salt, h)
@@ -70,6 +78,11 @@ def test_store_dedup_and_reminders():
         assert len(s.due_reminders(100)) == 1
         s.mark_reminder_fired(rid)
         assert len(s.due_reminders(100)) == 0
+        # upcoming_reminders must be scoped to the requesting chat only
+        s.add_reminder(7, 500.0, "chat7 event", {})
+        s.add_reminder(8, 500.0, "chat8 event", {})
+        mine = s.upcoming_reminders(7, 0.0, 1000.0)
+        assert len(mine) == 1 and mine[0]["title"] == "chat7 event"
     finally:
         s.close()
         os.remove(p)
