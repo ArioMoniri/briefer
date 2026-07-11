@@ -25,7 +25,8 @@ from briefer.config import load_config  # noqa: E402
 
 SCOPES = [
     "https://www.googleapis.com/auth/spreadsheets",
-    "https://www.googleapis.com/auth/drive",
+    # Least privilege: only files Briefer itself creates/opens.
+    "https://www.googleapis.com/auth/drive.file",
 ]
 
 

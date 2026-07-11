@@ -21,7 +21,10 @@ def _esc(text: str) -> str:
         .replace("\\", "\\\\")
         .replace(";", "\\;")
         .replace(",", "\\,")
-        .replace("\r\n", "\\n")
+        # Normalize all line-break variants (incl. a lone CR) before escaping,
+        # so a bare \r can't survive and inject new ICS lines/components.
+        .replace("\r\n", "\n")
+        .replace("\r", "\n")
         .replace("\n", "\\n")
     )
 

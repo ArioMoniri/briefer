@@ -9,6 +9,7 @@ import time
 from datetime import datetime, timedelta, timezone
 from typing import Any
 from urllib.parse import urlencode
+from zoneinfo import ZoneInfo
 
 from telegram import (Update, InputFile, InlineKeyboardButton,
                       InlineKeyboardMarkup)
@@ -53,6 +54,13 @@ class BrieferBot:
 
     def _is_admin(self, chat_id: int) -> bool:
         return chat_id in self.cfg.admins
+
+    def _localize(self, dt: datetime) -> datetime:
+        """Attach the configured timezone to a naive datetime so the ICS file,
+        the Google Calendar link and reminder scheduling all agree."""
+        if dt.tzinfo is None:
+            return dt.replace(tzinfo=ZoneInfo(self.cfg.timezone))
+        return dt
 
     def _authed(self, chat_id: int) -> bool:
         return self.store.is_authed(chat_id, AUTH_TTL)
@@ -232,11 +240,13 @@ class BrieferBot:
         if not rem:
             await self._reply(update, "No upcoming deadlines are being tracked.")
             return
-        lines = ["⏰ *Upcoming deadline reminders*"]
+        # Titles are html.escaped, so send as HTML (not Markdown) to avoid
+        # broken rendering / Telegram rejecting the message.
+        lines = ["⏰ <b>Upcoming deadline reminders</b>"]
         for r in rem[:20]:
             when = datetime.fromtimestamp(r["fire_at"]).strftime("%Y-%m-%d %H:%M")
             lines.append(f"• {html.escape(r['title'])} — poke at {when}")
-        await self._reply(update, "\n".join(lines))
+        await self._reply(update, "\n".join(lines), parse_mode=ParseMode.HTML)
 
     async def cmd_cancel(self, update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         ctx.user_data.pop("force_kind", None)
@@ -389,6 +399,9 @@ class BrieferBot:
             label = "Application deadline: "
         else:
             return
+        # Localize a naive datetime once so the .ics and the Google Calendar
+        # button describe the same instant.
+        start = self._localize(start)
 
         title = label + str(a.get("title", "Event"))
         desc_parts = [str(a.get("summary", ""))]
@@ -435,8 +448,9 @@ class BrieferBot:
         dt = result.deadline_dt
         if dt is None:
             return
-        if dt.tzinfo is None:
-            dt = dt.replace(tzinfo=timezone.utc)
+        # A naive deadline is in the configured local timezone (matches the
+        # calendar exporter), not UTC.
+        dt = self._localize(dt)
         title = result.analysis.get("title", "event")
         now = datetime.now(timezone.utc)
         scheduled = 0
@@ -475,7 +489,10 @@ class BrieferBot:
                 await ctx.bot.send_message(r["chat_id"], body, parse_mode=ParseMode.HTML,
                                            disable_web_page_preview=True)
             except Exception:  # noqa: BLE001
-                log.exception("failed to send reminder %s", r["id"])
+                # Leave fired=0 so a transient failure retries next tick,
+                # instead of silently dropping the reminder.
+                log.exception("failed to send reminder %s; will retry", r["id"])
+                continue
             self.store.mark_reminder_fired(r["id"])
 
     # ------------------------------------------------------------------
@@ -494,14 +511,15 @@ class BrieferBot:
         return True
 
     async def _reply(self, update: Update, text: str, *, keyboard=None,
-                     preview: bool = False) -> None:
+                     preview: bool = False,
+                     parse_mode: str = ParseMode.MARKDOWN) -> None:
         target = update.effective_message
         if target is None and update.callback_query:
             target = update.callback_query.message
         if target is None:
             return
         await target.reply_text(
-            text, parse_mode=ParseMode.MARKDOWN, reply_markup=keyboard,
+            text, parse_mode=parse_mode, reply_markup=keyboard,
             disable_web_page_preview=not preview,
         )
 
@@ -526,7 +544,11 @@ def _slug(text: str) -> str:
 
 def _gcal_link(title: str, start: datetime, all_day: bool, details: str,
                location: str) -> str:
-    """Build a Google Calendar 'add event' template URL (fallback to ICS)."""
+    """Build a Google Calendar 'add event' template URL (fallback to ICS).
+
+    `start` must already be tz-aware (localized by the caller) so this matches
+    the .ics exporter.
+    """
     if start.tzinfo is None:
         start = start.replace(tzinfo=timezone.utc)
     if all_day:

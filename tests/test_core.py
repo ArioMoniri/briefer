@@ -83,6 +83,30 @@ def test_ics_generation():
     assert "DTSTART:20260801T110000Z" in ics     # 14:00 Istanbul -> 11:00 UTC
 
 
+def test_ics_and_gcal_timezone_agree():
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+    import re
+    from briefer.calendar_ics import build_event_ics
+    from briefer.telegram_bot import _gcal_link
+    start = datetime(2026, 8, 1, 14, 0, tzinfo=ZoneInfo("Europe/Istanbul"))
+    ics = build_event_ics(title="X", start=start, tz_name="Europe/Istanbul").decode()
+    gl = _gcal_link("X", start, False, "d", "loc")
+    ics_dt = re.search(r"DTSTART:(\d+T\d+Z)", ics).group(1)
+    gl_dt = re.search(r"dates=(\d+T\d+Z)", gl).group(1)
+    assert ics_dt == gl_dt == "20260801T110000Z"
+
+
+def test_ics_escapes_bare_cr():
+    from datetime import datetime
+    from briefer.calendar_ics import build_event_ics
+    ics = build_event_ics(title="A\rEND:VEVENT", start=datetime(2026, 8, 1),
+                          tz_name="UTC", all_day=True).decode()
+    # A bare CR must not create a new physical line inside SUMMARY.
+    assert "\rEND:VEVENT" not in ics
+    assert "SUMMARY:A\\nEND:VEVENT" in ics
+
+
 def test_clamp():
     assert clamp("abc", 10) == "abc"
     assert "truncated" in clamp("a" * 100, 10)

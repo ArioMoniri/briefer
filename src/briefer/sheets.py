@@ -18,7 +18,9 @@ log = logging.getLogger("briefer.sheets")
 
 _SCOPES = [
     "https://www.googleapis.com/auth/spreadsheets",
-    "https://www.googleapis.com/auth/drive",
+    # drive.file (not full drive): only files this app creates/opens, so a
+    # stolen token can't read the owner's whole Drive.
+    "https://www.googleapis.com/auth/drive.file",
 ]
 
 
