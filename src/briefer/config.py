@@ -90,6 +90,8 @@ class Config:
     whisper_model: str
     transcription_max_seconds: int
     media_max_bytes: int
+    video_keyframes: int
+    enable_gallery_dl: bool
 
     # Behaviour
     max_download_bytes: int
@@ -188,6 +190,8 @@ def load_config() -> Config:
         whisper_model=_get("WHISPER_MODEL", "base"),
         transcription_max_seconds=_get_int("TRANSCRIPTION_MAX_SECONDS", 1800),
         media_max_bytes=_get_int("MEDIA_MAX_BYTES", 50_000_000),
+        video_keyframes=_get_int("VIDEO_KEYFRAMES", 4),
+        enable_gallery_dl=_get_bool("ENABLE_GALLERY_DL", True),
         company_name=_get("COMPANY_NAME", "Vivax"),
         company_url=_get("COMPANY_URL", "https://getvivax.com"),
         company_focus=_get(

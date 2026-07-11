@@ -301,12 +301,22 @@ def _get_whisper(model_name: str):
 
 
 class VideoTranscriber:
+    """Universal media downloader (yt-dlp) + speech-to-text (Whisper) +
+    keyframe grabber. Works for YouTube, X, TikTok, Instagram, Facebook,
+    Vimeo, LinkedIn and ~1800 other yt-dlp sites.
+
+    Returns both the spoken transcript AND a few visual keyframes so the
+    downstream Anthropic multimodal model can 'watch' the video, not just
+    read it.
+    """
+
     def __init__(self, enabled: bool, model: str, max_seconds: int,
-                 max_bytes: int) -> None:
+                 max_bytes: int, keyframes: int = 4) -> None:
         self.enabled = enabled
         self.model = model
         self.max_seconds = max_seconds
         self.max_bytes = max_bytes
+        self.keyframes = max(0, keyframes)
 
     def _transcribe_path(self, path: str) -> str:
         model = _get_whisper(self.model)
@@ -323,9 +333,11 @@ class VideoTranscriber:
             return "(could not transcribe this media)"
 
     def transcribe_url(self, url: str) -> dict[str, Any]:
-        """Return {title, uploader, duration, transcript, note}."""
-        out: dict[str, Any] = {"title": "", "uploader": "", "duration": None,
-                               "transcript": "", "note": ""}
+        """Return {title, uploader, description, duration, transcript,
+        keyframes: list[bytes], note}."""
+        out: dict[str, Any] = {"title": "", "uploader": "", "description": "",
+                               "duration": None, "transcript": "",
+                               "keyframes": [], "note": ""}
         ok, reason = is_safe_url(url)
         if not ok:
             out["note"] = f"refused unsafe URL: {reason}"
@@ -337,47 +349,149 @@ class VideoTranscriber:
             if cap:
                 out["transcript"] = cap
                 out["note"] = "captions"
-        if not self.enabled and not out["transcript"]:
-            out["note"] = "transcription disabled; no captions"
-            return out
-        # 2) fetch metadata + (if needed) audio via yt-dlp, then whisper
+        # 2) yt-dlp for metadata/caption + (if needed) media, then whisper
+        #    + keyframes. We still download for frames even if captions exist.
         try:
             self._ytdlp(url, out)
         except Exception as exc:  # noqa: BLE001
             log.warning("yt-dlp failed for %s: %s", url, exc)
             if not out["transcript"]:
-                out["note"] = "could not fetch/transcribe video"
+                out["note"] = out["note"] or "could not fetch/transcribe video"
         return out
 
     def _ytdlp(self, url: str, out: dict[str, Any]) -> None:
         import yt_dlp
 
+        want_frames = self.keyframes > 0
+        have_caption = bool(out["transcript"])
+        # We need the actual media file if we must transcribe OR grab frames.
+        need_media = (self.enabled and not have_caption) or want_frames
+        # A small video stream serves both audio (for Whisper) and frames.
+        fmt = "best[height<=480]/best" if want_frames else "bestaudio/best"
+
         with tempfile.TemporaryDirectory() as tmp:
             opts = {
                 "quiet": True, "no_warnings": True, "noplaylist": True,
-                "skip_download": bool(out["transcript"]),  # only need meta if we have captions
-                "format": "bestaudio/best",
+                "skip_download": not need_media,
+                "format": fmt,
                 "max_filesize": self.max_bytes,
-                "outtmpl": str(Path(tmp) / "a.%(ext)s"),
+                "outtmpl": str(Path(tmp) / "m.%(ext)s"),
                 "socket_timeout": 20,
+                "retries": 2,
             }
             with yt_dlp.YoutubeDL(opts) as ydl:
-                info = ydl.extract_info(url, download=not out["transcript"])
+                info = ydl.extract_info(url, download=need_media)
             out["title"] = info.get("title", "") or out["title"]
-            out["uploader"] = info.get("uploader", "") or out["uploader"]
+            out["uploader"] = (info.get("uploader") or info.get("channel")
+                               or "") or out["uploader"]
+            out["description"] = (info.get("description") or "")[:4000]
             out["duration"] = info.get("duration")
-            if out["transcript"]:
+
+            if not need_media:
                 return
-            if out["duration"] and out["duration"] > self.max_seconds:
+            files = [p for p in Path(tmp).glob("m.*")]
+            if not files:
+                out["note"] = out["note"] or "no media downloaded (size cap?)"
+                return
+            media_path = str(files[0])
+
+            too_long = bool(out["duration"] and out["duration"] > self.max_seconds)
+            if self.enabled and not have_caption and not too_long:
+                out["transcript"] = self.transcribe_file(media_path)
+                out["note"] = "whisper"
+            elif too_long and not have_caption:
                 out["note"] = (f"video too long to transcribe "
                                f"({out['duration']}s > {self.max_seconds}s)")
-                return
-            files = list(Path(tmp).glob("a.*"))
-            if not files:
-                out["note"] = "no audio downloaded"
-                return
-            out["transcript"] = self.transcribe_file(str(files[0]))
-            out["note"] = "whisper"
+
+            if want_frames:
+                out["keyframes"] = _extract_keyframes(
+                    media_path, self.keyframes, out["duration"])
+
+
+def _extract_keyframes(path: str, n: int, duration: float | None) -> list[bytes]:
+    """Grab `n` evenly-spaced JPEG frames via ffmpeg (fast seeks, no shell).
+
+    Returns [] if ffmpeg is unavailable. Frames are scaled down to keep the
+    vision-model token cost modest.
+    """
+    import os
+    import shutil
+    import subprocess
+
+    if n <= 0 or not shutil.which("ffmpeg"):
+        return []
+    frames: list[bytes] = []
+    dur = duration or 0
+    for i in range(n):
+        ts = (dur * (i + 0.5) / n) if dur else i * 3.0
+        out_path = str(Path(tempfile.gettempdir()) / f"bf_{os.getpid()}_{i}.jpg")
+        cmd = ["ffmpeg", "-nostdin", "-loglevel", "error", "-ss", f"{ts:.2f}",
+               "-i", path, "-frames:v", "1", "-q:v", "5",
+               "-vf", "scale=768:-2", "-y", out_path]
+        try:
+            subprocess.run(cmd, capture_output=True, timeout=30, check=True)
+            with open(out_path, "rb") as fh:
+                frames.append(fh.read())
+        except Exception:  # noqa: BLE001
+            pass
+        finally:
+            if os.path.exists(out_path):
+                os.remove(out_path)
+    return frames
+
+
+def gallery_images(url: str, max_n: int, max_bytes: int) -> list[bytes]:
+    """Download images from a social post via gallery-dl (Instagram photos,
+    Pinterest, image galleries…) so the vision model can read them.
+
+    Best-effort: many sites (esp. Instagram) require a logged-in cookie for
+    non-public content, so this returns [] rather than failing loudly.
+    Invoked via `python -m gallery_dl` with an argument list — no shell.
+    """
+    import importlib.util
+    import os
+    import subprocess
+    import sys
+
+    ok, reason, _ = safe_resolve(url)
+    if not ok:
+        log.warning("gallery-dl refused unsafe URL %s: %s", url, reason)
+        return []
+    if importlib.util.find_spec("gallery_dl") is None:
+        return []
+    images: list[bytes] = []
+    with tempfile.TemporaryDirectory() as tmp:
+        cmd = [sys.executable, "-m", "gallery_dl", "--quiet",
+               "--range", f"1-{max(1, max_n)}", "-D", tmp, url]
+        try:
+            subprocess.run(cmd, capture_output=True, timeout=90, check=False)
+        except Exception as exc:  # noqa: BLE001
+            log.warning("gallery-dl failed for %s: %s", url, exc)
+            return []
+        exts = {".jpg", ".jpeg", ".png", ".webp", ".gif"}
+        for p in sorted(Path(tmp).rglob("*")):
+            if p.suffix.lower() in exts and p.is_file():
+                if p.stat().st_size > max_bytes:
+                    continue
+                try:
+                    images.append(p.read_bytes())
+                except Exception:  # noqa: BLE001
+                    continue
+            if len(images) >= max_n:
+                break
+    return images
+
+
+def guess_media_type(data: bytes) -> str:
+    if data[:3] == b"\xff\xd8\xff":
+        return "image/jpeg"
+    if data[:8] == b"\x89PNG\r\n\x1a\n":
+        return "image/png"
+    if data[:4] == b"RIFF" and data[8:12] == b"WEBP":
+        return "image/webp"
+    if data[:6] in (b"GIF87a", b"GIF89a"):
+        return "image/gif"
+    return "image/jpeg"
 
 
 def _youtube_id(url: str) -> str | None:

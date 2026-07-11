@@ -60,9 +60,11 @@ def main() -> int:
                             cfg.twitter_consumer_secret)
     transcriber = VideoTranscriber(
         cfg.enable_transcription, cfg.whisper_model,
-        cfg.transcription_max_seconds, cfg.media_max_bytes)
+        cfg.transcription_max_seconds, cfg.media_max_bytes,
+        keyframes=cfg.video_keyframes)
     enricher = Enricher(cfg.max_download_bytes, tweet_extractor=tweets,
-                        transcriber=transcriber)
+                        transcriber=transcriber,
+                        enable_gallery_dl=cfg.enable_gallery_dl)
     try:
         sheets = SheetsClient(
             cfg.google_auth_mode, str(cfg.service_account_path),

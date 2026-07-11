@@ -137,6 +137,30 @@ def test_media_regexes_and_tweet_parse():
     assert "@alice" in r and "Reposted" in r and "Quoted" in r and "reply" in r.lower()
 
 
+def test_video_handler_adds_caption_and_keyframes():
+    from briefer.enrich import Enricher, EnrichedContent
+
+    class FakeTranscriber:
+        def transcribe_url(self, u):
+            return {"title": "Clip", "uploader": "@c", "description": "cap #ai",
+                    "transcript": "spoken", "keyframes": [b"\xff\xd8\xffa", b"\xff\xd8\xffb"],
+                    "note": "whisper"}
+
+    e = Enricher(15_000_000, transcriber=FakeTranscriber(), enable_gallery_dl=False)
+    c = EnrichedContent()
+    assert e._handle_video("https://www.tiktok.com/@x/video/1", c) is True
+    block = c.link_texts["https://www.tiktok.com/@x/video/1"]
+    assert "cap #ai" in block and "spoken" in block
+    assert sum(1 for a in c.attachments if a.kind == "image") == 2
+
+
+def test_guess_media_type():
+    from briefer.media import guess_media_type
+    assert guess_media_type(b"\xff\xd8\xff\xe0xx") == "image/jpeg"
+    assert guess_media_type(b"\x89PNG\r\n\x1a\nxx") == "image/png"
+    assert guess_media_type(b"RIFF0000WEBPxx") == "image/webp"
+
+
 def test_clamp():
     assert clamp("abc", 10) == "abc"
     assert "truncated" in clamp("a" * 100, 10)

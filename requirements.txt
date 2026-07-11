@@ -19,3 +19,6 @@ youtube-transcript-api==0.6.2
 # Local speech-to-text (CPU, int8). Heavy-ish; downloads a model on first
 # use. Disable with ENABLE_TRANSCRIPTION=0 if you don't need video/audio.
 faster-whisper==1.0.3
+# Fallback downloader for image-based social posts (Instagram photos,
+# Pinterest, galleries…). Disable with ENABLE_GALLERY_DL=0.
+gallery-dl==1.27.7

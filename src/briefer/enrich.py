@@ -79,10 +79,24 @@ class EnrichedContent:
 
 class Enricher:
     def __init__(self, max_bytes: int, tweet_extractor=None,
-                 transcriber=None) -> None:
+                 transcriber=None, enable_gallery_dl: bool = True,
+                 gallery_max_images: int = 6) -> None:
         self.max_bytes = max_bytes
         self.tweets = tweet_extractor
         self.transcriber = transcriber
+        self.enable_gallery_dl = enable_gallery_dl
+        self.gallery_max_images = gallery_max_images
+
+    def _try_gallery(self, url: str, content: EnrichedContent) -> int:
+        """Fallback downloader for image posts → vision. Returns #images."""
+        if not self.enable_gallery_dl:
+            return 0
+        from .media import gallery_images, guess_media_type
+        imgs = gallery_images(url, self.gallery_max_images, self.max_bytes)
+        for data in imgs:
+            content.attachments.append(
+                make_image_attachment(data, guess_media_type(data), "post_image"))
+        return len(imgs)
         # If egress goes through an HTTP proxy, the proxy owns DNS + policy, so
         # IP-pinning is both unnecessary and can break the proxy tunnel. Only
         # pin on direct egress, where DNS-rebinding is a real concern.
@@ -187,6 +201,9 @@ class Enricher:
                     tr = self.transcriber.transcribe_url(vurl)
                     if tr.get("transcript"):
                         rendered += f"\n[video transcript]: {tr['transcript']}"
+                    for frame in tr.get("keyframes", []):
+                        content.attachments.append(make_image_attachment(
+                            frame, "image/jpeg", "tweet_video_frame"))
             for purl in sub.photo_urls[:4]:
                 resp = self._fetch(purl)
                 if resp and resp.headers.get("content-type", "").startswith("image/"):
@@ -202,11 +219,27 @@ class Enricher:
         except Exception as exc:  # noqa: BLE001
             log.warning("video transcribe failed for %s: %s", url, exc)
             return False
+        frames = res.get("keyframes", [])
+        got_video = bool(res.get("transcript") or res.get("description") or frames)
+        if not got_video:
+            # Not actually a video (e.g. an Instagram photo post) — try the
+            # gallery downloader so the images still reach the vision model.
+            n = self._try_gallery(url, content)
+            if n:
+                content.link_texts[url] = (
+                    f"Image post ({n} image(s) downloaded and analysed via vision).")
+                return True
         block = f"Title: {res.get('title','')}\nUploader: {res.get('uploader','')}\n"
+        if res.get("description"):
+            block += "Description/caption:\n" + res["description"] + "\n"
         if res.get("transcript"):
             block += "Transcript:\n" + res["transcript"]
         else:
             block += "(no transcript — " + (res.get("note") or "unavailable") + ")"
+        # Keyframes → analysed by the Anthropic multimodal model as images.
+        for frame in frames:
+            content.attachments.append(make_image_attachment(
+                frame, "image/jpeg", "video_frame"))
         content.link_texts[url] = block
         return True
 

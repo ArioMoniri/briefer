@@ -119,12 +119,18 @@ Runtime additions persist in the local DB and appear in `/allowlist`.
   via yt-dlp, but for post *text* the reliable route on any platform is to send
   a **screenshot** (read via vision) or **paste the text** — that works
   everywhere and needs no credentials.
-- **Videos & audio**: uploaded video/voice notes, and YouTube/Vimeo/TikTok/X
-  video links, are **transcribed** — YouTube uses captions when available,
-  otherwise a local **Whisper** model (`faster-whisper`, CPU) does the
-  transcription. Controlled by `ENABLE_TRANSCRIPTION` / `WHISPER_MODEL`.
-  Needs `ffmpeg` (installed by `setup.sh`). Turn it off with
-  `ENABLE_TRANSCRIPTION=0` on tiny servers.
+- **Videos & audio**: uploaded video/voice notes, and YouTube / Vimeo /
+  **TikTok** / Instagram / Facebook / LinkedIn / X video links, are downloaded
+  with **yt-dlp** and **transcribed** (captions when available, else local
+  **Whisper**). Briefer also captures the post **caption/description** and
+  grabs a few **keyframes** that are sent to the Anthropic **multimodal**
+  model — so it *watches* the video (visuals) as well as *reads* it (audio +
+  caption). Controlled by `ENABLE_TRANSCRIPTION`, `WHISPER_MODEL`,
+  `VIDEO_KEYFRAMES`. Needs `ffmpeg` (installed by `setup.sh`).
+- **Image posts**: for photo posts yt-dlp can't handle (e.g. Instagram
+  photos, Pinterest, galleries), a **gallery-dl** fallback downloads the
+  images and feeds them to the vision model (`ENABLE_GALLERY_DL`). Public
+  content only — private posts may need a login cookie.
 
 ## Networking / firewall
 
