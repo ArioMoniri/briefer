@@ -228,9 +228,11 @@ class BrieferBot:
                 if last_at.isdigit() else "never")
         art_row = self.store.get_meta("article_last_row", "?")
         evt_row = self.store.get_meta("event_last_row", "?")
+        from .version import build_version
         await self._reply(
             update,
             "💚 <b>Status</b>\n"
+            f"Build: <code>{html.escape(build_version())}</code>\n"
             f"Uptime: {up}\n"
             f"Queue: {queued} waiting · processed: {done} · last: {when}\n"
             f"Last row — Articles: {art_row}, Events: {evt_row}\n"

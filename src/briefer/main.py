@@ -36,7 +36,9 @@ def _run_bootstrap(cfg, log) -> None:
 def main() -> int:
     cfg = load_config()
     log = setup_logging(cfg.log_level, cfg.data_dir)
-    log.info("Briefer starting (bootstrap=%s)", cfg.bootstrap)
+    from .version import build_version
+    log.info("Briefer starting (build=%s, bootstrap=%s)",
+             build_version(), cfg.bootstrap)
 
     try:
         cfg.validate()

@@ -95,10 +95,17 @@ attach() {
 foreground() { PYTHONPATH="$APPDIR/src" exec "$PY" -m briefer; }
 
 update() {
-  echo "Pulling latest code… (.env, token.json and data/ are preserved)"
-  git pull --ff-only || echo "git pull skipped/failed"
+  echo "Updating to latest… (.env, token.json and data/ are preserved)"
+  git fetch origin main
+  # Force to exactly origin/main. Safe: .env/token/data/ are git-ignored, so
+  # only tracked source files are reset — this guarantees the update applies
+  # even if a plain ff-only pull was being blocked by local edits.
+  if ! git merge --ff-only origin/main 2>/dev/null; then
+    echo "  (fast-forward blocked; hard-resetting tracked files to origin/main)"
+    git reset --hard origin/main
+  fi
+  echo "  now at: $(git rev-parse --short HEAD)  $(git log -1 --format=%s | cut -c1-60)"
   "$PIP" install -r requirements.txt
-  # Add any new settings introduced by the update (prompts if interactive).
   [ -f "$APPDIR/.env" ] && "$PY" "$APPDIR/configure.py" || true
   restart
 }
