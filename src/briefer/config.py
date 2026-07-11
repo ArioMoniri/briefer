@@ -94,6 +94,8 @@ class Config:
     enable_gallery_dl: bool
     enable_browser_fallback: bool
     cookies_file: str
+    browser_profile_dir: str
+    browser_storage_state: str
 
     # Behaviour
     max_download_bytes: int
@@ -175,6 +177,21 @@ class Config:
         p = self._resolve(self.cookies_file)
         return str(p) if p.exists() else ""
 
+    @property
+    def browser_profile_path(self) -> str:
+        """Absolute path to the persistent browser profile dir if it exists."""
+        if not self.browser_profile_dir:
+            return ""
+        p = self._resolve(self.browser_profile_dir)
+        return str(p) if p.is_dir() else ""
+
+    @property
+    def browser_storage_state_path(self) -> str:
+        if not self.browser_storage_state:
+            return ""
+        p = self._resolve(self.browser_storage_state)
+        return str(p) if p.exists() else ""
+
 
 def load_config() -> Config:
     cfg = Config(
@@ -208,6 +225,10 @@ def load_config() -> Config:
         # Netscape cookies.txt shared by the browser / yt-dlp / gallery-dl so
         # logged-in content (LinkedIn, Instagram, private X…) is accessible.
         cookies_file=_get("COOKIES_FILE", "cookies.txt"),
+        # Persistent Chromium profile — log in once (./manage.sh browser-login)
+        # and every render stays logged in. Empty string disables.
+        browser_profile_dir=_get("BROWSER_PROFILE_DIR", "browser_profile"),
+        browser_storage_state=_get("BROWSER_STORAGE_STATE", "storage_state.json"),
         company_name=_get("COMPANY_NAME", "Vivax"),
         company_url=_get("COMPANY_URL", "https://getvivax.com"),
         company_focus=_get(

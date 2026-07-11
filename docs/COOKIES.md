@@ -5,7 +5,47 @@ private Instagram, members-only pages. There is **no public API and no
 installer that bypasses login**; the only reliable way to read that content
 is to fetch it **as a logged-in user**, i.e. with your own browser cookies.
 
-Briefer supports a single `cookies.txt` that is shared by all three fetchers:
+There are two ways to give Briefer your login. **Option A (persistent browser
+login) is recommended** — you log in once through a real browser and the
+session (cookies *and* localStorage) is kept in a profile the bot reuses, so it
+stays logged in. Option B is a `cookies.txt` file.
+
+---
+
+## Option A — Persistent browser login (recommended)
+
+Log in once; every future render is authenticated and it survives restarts.
+
+### On a headless server (no screen) — via VNC
+```bash
+./manage.sh enable-browser     # once, if you haven't (installs Chromium)
+./manage.sh browser-login      # starts a virtual screen + VNC and a browser
+```
+It prints instructions:
+1. On **your computer**: `ssh -L 5900:localhost:5900 <you>@<server>`
+2. Open a **VNC viewer** → connect to `localhost:5900`
+3. In the browser window, **log in** to LinkedIn / Instagram / X.
+4. Back in the SSH terminal, **press Enter** — the session is saved to
+   `browser_profile/` + `storage_state.json`.
+5. `./manage.sh restart`
+
+(Any VNC viewer works: TigerVNC, RealVNC, macOS Screen Sharing → `vnc://localhost:5900`.)
+
+### On your laptop instead (then copy up)
+```bash
+PYTHONPATH=src ./.venv/bin/python login_browser.py   # opens a real browser
+# log in, press Enter, then copy the results to the server:
+scp -r browser_profile storage_state.json <you>@<server>:/data/briefer/
+```
+
+The profile/state are **secrets** (they're your logged-in session) and are
+git-ignored. Delete `browser_profile/` + `storage_state.json` to log out.
+
+---
+
+## Option B — a cookies.txt file
+
+Briefer also accepts a single `cookies.txt` shared by all three fetchers:
 the headless browser (Playwright), `yt-dlp` (videos) and `gallery-dl` (image
 posts). Provide it once and LinkedIn/Instagram/etc. become readable.
 

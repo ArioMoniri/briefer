@@ -48,14 +48,24 @@ def _load_netscape_cookies(path: str) -> list[dict]:
     return cookies
 
 
-def fetch_rendered(url: str, timeout_ms: int = 20000,
-                   max_chars: int = 12000, cookies_file: str = "") -> str:
+_UA = ("Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+       "(KHTML, like Gecko) Chrome/124.0 Safari/537.36")
+_ARGS = ["--no-sandbox", "--disable-dev-shm-usage", "--disable-gpu"]
+
+
+def fetch_rendered(url: str, timeout_ms: int = 20000, max_chars: int = 12000,
+                   cookies_file: str = "", profile_dir: str = "",
+                   storage_state: str = "") -> str:
     """Render `url` in headless Chromium and return 'title\\n\\ntext'.
 
     Runs the SYNC Playwright API, so it must be called from a worker thread
     (it is — enrichment runs inside asyncio.to_thread), never the event loop.
     Returns "" on any failure or if Playwright/browser is unavailable.
-    If cookies_file is given, the page is loaded logged-in (LinkedIn, etc.).
+
+    Auth precedence (so login-walled pages load AS you):
+      1. profile_dir      — a persistent Chromium profile (stays logged in)
+      2. storage_state    — a Playwright storage_state.json (cookies+localStorage)
+      3. cookies_file     — a Netscape cookies.txt
     """
     if not available():
         return ""
@@ -68,24 +78,30 @@ def fetch_rendered(url: str, timeout_ms: int = 20000,
     except Exception:  # noqa: BLE001
         return ""
 
-    ua = ("Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
-          "(KHTML, like Gecko) Chrome/124.0 Safari/537.36")
+    import os
+
+    have_profile = bool(profile_dir and os.path.isdir(profile_dir))
+    have_state = bool(storage_state and os.path.isfile(storage_state))
     try:
         with sync_playwright() as p:
-            browser = p.chromium.launch(
-                headless=True,
-                args=["--no-sandbox", "--disable-dev-shm-usage",
-                      "--disable-gpu"],
-            )
-            try:
-                ctx = browser.new_context(user_agent=ua, locale="en-US")
-                if cookies_file:
+            if have_profile:
+                ctx = p.chromium.launch_persistent_context(
+                    profile_dir, headless=True, args=_ARGS,
+                    user_agent=_UA, locale="en-US")
+                browser = None
+            else:
+                browser = p.chromium.launch(headless=True, args=_ARGS)
+                ctx = browser.new_context(
+                    user_agent=_UA, locale="en-US",
+                    storage_state=storage_state if have_state else None)
+                if not have_state and cookies_file:
                     cookies = _load_netscape_cookies(cookies_file)
                     if cookies:
                         try:
                             ctx.add_cookies(cookies)
                         except Exception as exc:  # noqa: BLE001
                             log.warning("could not add cookies: %s", exc)
+            try:
                 page = ctx.new_page()
                 page.goto(url, wait_until="domcontentloaded", timeout=timeout_ms)
                 try:
@@ -96,7 +112,9 @@ def fetch_rendered(url: str, timeout_ms: int = 20000,
                 text = page.evaluate(
                     "() => document.body ? document.body.innerText : ''") or ""
             finally:
-                browser.close()
+                ctx.close()
+                if browser is not None:
+                    browser.close()
     except Exception as exc:  # noqa: BLE001
         log.warning("browser render failed for %s: %s", url, exc)
         return ""

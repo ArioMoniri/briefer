@@ -8,6 +8,8 @@ token.json
 client_secret*.json
 cookies.txt
 *cookies*.txt
+storage_state.json
+browser_profile/
 *.key
 *.pem
 

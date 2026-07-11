@@ -81,7 +81,8 @@ class Enricher:
     def __init__(self, max_bytes: int, tweet_extractor=None,
                  transcriber=None, enable_gallery_dl: bool = True,
                  gallery_max_images: int = 6, enable_browser: bool = False,
-                 cookies_file: str = "") -> None:
+                 cookies_file: str = "", browser_profile_dir: str = "",
+                 browser_storage_state: str = "") -> None:
         self.max_bytes = max_bytes
         self.tweets = tweet_extractor
         self.transcriber = transcriber
@@ -89,6 +90,8 @@ class Enricher:
         self.gallery_max_images = gallery_max_images
         self.enable_browser = enable_browser
         self.cookies_file = cookies_file
+        self.browser_profile_dir = browser_profile_dir
+        self.browser_storage_state = browser_storage_state
 
     def _try_gallery(self, url: str, content: EnrichedContent) -> int:
         """Fallback downloader for image posts → vision. Returns #images."""
@@ -341,7 +344,10 @@ class Enricher:
             return ""
         try:
             from .browser import fetch_rendered
-            return fetch_rendered(url, cookies_file=self.cookies_file)
+            return fetch_rendered(
+                url, cookies_file=self.cookies_file,
+                profile_dir=self.browser_profile_dir,
+                storage_state=self.browser_storage_state)
         except Exception as exc:  # noqa: BLE001
             log.warning("browser fallback error for %s: %s", url, exc)
             return ""

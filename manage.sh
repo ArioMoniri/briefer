@@ -103,6 +103,45 @@ update() {
 
 google_auth() { PYTHONPATH="$APPDIR/src" "$PY" "$APPDIR/authorize_google.py"; }
 
+# Interactive login on the (headless) server via a virtual display + VNC.
+# You connect a VNC viewer through an SSH tunnel, log in, and the session is
+# saved to a persistent profile the bot reuses.
+browser_login() {
+  command -v "$APPDIR/.venv/bin/playwright" >/dev/null 2>&1 || {
+    echo "Browser not installed. Run first: ./manage.sh enable-browser"; exit 1; }
+  if ! command -v Xvfb >/dev/null 2>&1 || ! command -v x11vnc >/dev/null 2>&1; then
+    echo "Installing xvfb + x11vnc (needed to show a browser on a headless server)…"
+    local pm=""; for c in apt-get dnf yum apk pacman zypper; do command -v "$c" >/dev/null 2>&1 && { pm="$c"; break; }; done
+    case "$pm" in
+      apt-get) _sudo apt-get update -y && _sudo apt-get install -y xvfb x11vnc ;;
+      dnf|yum) _sudo "$pm" install -y xorg-x11-server-Xvfb x11vnc ;;
+      apk)     _sudo apk add --no-cache xvfb x11vnc ;;
+      pacman)  _sudo pacman -Sy --noconfirm xorg-server-xvfb x11vnc ;;
+      zypper)  _sudo zypper install -y xvfb-run x11vnc ;;
+      *) echo "Install xvfb and x11vnc manually, then re-run."; exit 1 ;;
+    esac
+  fi
+  Xvfb :99 -screen 0 1360x900x24 >/dev/null 2>&1 &
+  local xvfb=$!
+  sleep 2
+  x11vnc -display :99 -localhost -rfbport 5900 -nopw -forever -quiet >/dev/null 2>&1 &
+  local vnc=$!
+  echo
+  echo "──────────────────────────────────────────────────────────────"
+  echo " 1) On YOUR computer, open an SSH tunnel to this server:"
+  echo "      ssh -L 5900:localhost:5900 <you>@<this-server>"
+  echo " 2) Open a VNC viewer and connect to:  localhost:5900"
+  echo " 3) In the browser window, log in to LinkedIn / Instagram / etc."
+  echo " 4) Come BACK HERE and press Enter to save the session."
+  echo "──────────────────────────────────────────────────────────────"
+  DISPLAY=:99 PYTHONPATH="$APPDIR/src" \
+    BROWSER_PROFILE_DIR="$APPDIR/browser_profile" \
+    BROWSER_STORAGE_STATE="$APPDIR/storage_state.json" \
+    "$PY" "$APPDIR/login_browser.py" || true
+  kill "$vnc" "$xvfb" 2>/dev/null || true
+  echo "Login saved. Now: ./manage.sh restart"
+}
+
 # Install the optional headless-browser fallback (Playwright + Chromium).
 enable_browser() {
   echo "Installing Playwright + Chromium into the venv (adds a browser download)…"
@@ -124,5 +163,6 @@ case "$cmd" in
   logs) logs ;; errors) errors ;; attach) attach ;; foreground|fg) foreground ;; update) update ;;
   google-auth|gauth) google_auth ;;
   enable-browser) enable_browser ;;
-  *) echo "usage: $0 {start|stop|restart|refresh|reset|status|logs|errors|attach|foreground|update|google-auth|enable-browser}"; exit 1 ;;
+  browser-login) browser_login ;;
+  *) echo "usage: $0 {start|stop|restart|refresh|reset|status|logs|errors|attach|foreground|update|google-auth|enable-browser|browser-login}"; exit 1 ;;
 esac

@@ -69,7 +69,11 @@ def main() -> int:
                         transcriber=transcriber,
                         enable_gallery_dl=cfg.enable_gallery_dl,
                         enable_browser=cfg.enable_browser_fallback,
-                        cookies_file=cookies)
+                        cookies_file=cookies,
+                        browser_profile_dir=cfg.browser_profile_path,
+                        browser_storage_state=cfg.browser_storage_state_path)
+    if cfg.browser_profile_path:
+        log.info("Using persistent browser profile: %s", cfg.browser_profile_path)
     # Reuse previously auto-created sheets so restarts don't spawn new empty
     # ones (and lose your data). Env IDs always win; otherwise fall back to the
     # ids we saved last time.
