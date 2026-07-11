@@ -72,12 +72,13 @@ def main() -> int:
         if cur is not None and cur != "":
             result[key] = cur                      # keep what you have
             continue
-        if cur == "" and key in existing and (default == "" or key in SKIP_PROMPT):
-            result[key] = cur                      # intentionally-empty optional
-            continue
-        # Missing (new key) or empty and worth asking about.
-        if default != "" and key in existing:
+        # A NEW setting that ships with a sensible default → use it silently
+        # (don't nag about toggles like ENABLE_WEB_SEARCH=1).
+        if key not in existing and default != "":
             result[key] = default
+            continue
+        if cur == "" and default != "":
+            result[key] = cur                      # you cleared it on purpose
             continue
         if not interactive or key in SKIP_PROMPT:
             result[key] = default
