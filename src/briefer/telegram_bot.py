@@ -408,11 +408,17 @@ class BrieferBot:
     # ------------------------------------------------------------------
     async def on_callback(self, update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         q = update.callback_query
-        await q.answer()
         chat_id = q.message.chat.id
+        data = q.data or ""
+        # Assignment buttons come from the *assignee* (who may not be allow-
+        # listed) — authorise by matching the assignment's chat id. This path
+        # answers the query itself, so don't pre-answer.
+        if data.startswith("asgn:"):
+            await self._on_assignment_button(q, chat_id, data)
+            return
+        await q.answer()
         if not self._allowed(chat_id):
             return
-        data = q.data or ""
         if data.startswith("mode:"):
             kind = data.split(":", 1)[1]
             ctx.user_data["force_kind"] = kind
@@ -455,6 +461,97 @@ class BrieferBot:
             document=buf, filename="briefer-calendar.html",
             caption="🌐 Open this in a browser — Month / Week / Day / Year / "
                     "List views, with navigation.")
+
+    async def _on_assignment_button(self, q, chat_id: int, data: str) -> None:
+        """Assignee tapped 👀 Seen / ✅ Mark checked in their DM."""
+        try:
+            _, action, eid = data.split(":", 2)
+        except ValueError:
+            return
+        asg = self.store.get_assignment(eid)
+        if not asg or asg.get("chat_id") != chat_id:
+            await q.answer("This isn't assigned to you.", show_alert=True)
+            return
+        sheet = asg.get("sheet") or "article"
+        row = None
+        try:
+            row = self.pipeline.sheets.find_row_by_id(sheet, eid)
+        except Exception:  # noqa: BLE001
+            pass
+        when = datetime.now().astimezone().strftime("%Y-%m-%d %H:%M")
+        if action == "seen":
+            self.store.mark_assignment_seen(eid)
+            if row:
+                self.pipeline.sheets.write_assignee_cells(
+                    sheet, row, seen=f"👀 seen {when}")
+            await q.answer("Marked as seen ✅")
+            try:
+                await q.edit_message_reply_markup(reply_markup=None)
+            except Exception:  # noqa: BLE001
+                pass
+        elif action == "done":
+            self.store.mark_assignment_seen(eid)
+            self.store.mark_assignment_done(eid, True)
+            if row:
+                self.pipeline.sheets.write_assignee_cells(
+                    sheet, row, seen=f"✅ done {when}", done=True)
+            await q.answer("Marked as checked ✅")
+            try:
+                await q.edit_message_text(
+                    q.message.text_html + "\n\n<b>✅ You marked this checked.</b>",
+                    parse_mode=ParseMode.HTML)
+            except Exception:  # noqa: BLE001
+                pass
+
+    async def cmd_people(self, update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+        if not await self._require_auth(update):
+            return
+        people = self.store.list_people()
+        lines = ["👥 <b>People directory</b>"]
+        if people:
+            for p in people:
+                lines.append(f"• {html.escape(p['name'])} — "
+                             f"<code>{p['chat_id']}</code>")
+        else:
+            lines.append("<i>No one mapped yet.</i>")
+        lines.append(
+            "\nMap a name to a chat id with <code>/name &lt;chat_id&gt; "
+            "&lt;name&gt;</code> (they must have <b>/start</b>-ed the bot), "
+            "remove with <code>/unname &lt;chat_id&gt;</code>. Then type that "
+            "name in a row's <b>Assignee</b> column and they'll be pinged.")
+        await self._reply(update, "\n".join(lines), parse_mode=ParseMode.HTML)
+
+    async def cmd_name(self, update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+        if not await self._require_auth(update):
+            return
+        args = ctx.args or []
+        if len(args) < 2 or not args[0].lstrip("-").isdigit():
+            await self._reply(update, "Usage: `/name <chat_id> <name>` — e.g. "
+                              "`/name 123456789 John`.")
+            return
+        cid, name = int(args[0]), " ".join(args[1:]).strip()
+        self.store.set_person(cid, name)
+        self._refresh_assignee_dropdown()
+        await self._reply(update, f"✅ Mapped *{name}* → `{cid}`. Type "
+                          f"*{name}* in an Assignee cell to ping them.")
+
+    async def cmd_unname(self, update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+        if not await self._require_auth(update):
+            return
+        args = ctx.args or []
+        if not args or not args[0].lstrip("-").isdigit():
+            await self._reply(update, "Usage: `/unname <chat_id>`.")
+            return
+        n = self.store.remove_person(int(args[0]))
+        self._refresh_assignee_dropdown()
+        await self._reply(update, "✅ Removed." if n else "No such person.")
+
+    def _refresh_assignee_dropdown(self) -> None:
+        try:
+            self.pipeline.sheets.set_assignee_dropdown(
+                [p["name"] for p in self.store.list_people()])
+        except Exception:  # noqa: BLE001
+            log.warning("could not refresh assignee dropdown")
 
     # ------------------------------------------------------------------
     # Message ingestion
@@ -1112,6 +1209,9 @@ BOT_COMMANDS = [
     ("logout", "End this chat's session"),
     ("id", "Show your chat id (no login needed)"),
     ("whoami", "Show your chat id"),
+    ("people", "List assignable people & how to map them"),
+    ("name", "Map a chat id to a name: /name <id> <name>"),
+    ("unname", "Remove a mapped person: /unname <id>"),
     ("cancel", "Cancel the current action"),
 ]
 
@@ -1156,6 +1256,9 @@ def build_application(cfg: Config, bot: BrieferBot) -> Application:
     app.add_handler(CommandHandler("deadlines", bot.cmd_deadlines))
     app.add_handler(CommandHandler("calendar", bot.cmd_calendar))
     app.add_handler(CommandHandler("reminders", bot.cmd_calendar))
+    app.add_handler(CommandHandler("people", bot.cmd_people))
+    app.add_handler(CommandHandler("name", bot.cmd_name))
+    app.add_handler(CommandHandler("unname", bot.cmd_unname))
     app.add_handler(CommandHandler("cancel", bot.cmd_cancel))
     app.add_handler(CommandHandler(
         "article", lambda u, c: bot.cmd_force("article", u, c)))

@@ -76,6 +76,24 @@ CREATE TABLE IF NOT EXISTS entries (
 );
 CREATE INDEX IF NOT EXISTS idx_entries_fp ON entries (fingerprint);
 CREATE INDEX IF NOT EXISTS idx_entries_sheet ON entries (sheet, removed);
+-- Directory mapping a person's name to their Telegram chat id, so a name tag
+-- typed in a row's Assignee column can be turned into a direct message.
+CREATE TABLE IF NOT EXISTS people (
+    chat_id    INTEGER PRIMARY KEY,
+    name       TEXT NOT NULL,
+    updated_at REAL NOT NULL
+);
+-- One assignment per entry: who a row is assigned to, and the state of their
+-- notification (delivered, acknowledged/seen, checked-done).
+CREATE TABLE IF NOT EXISTS assignments (
+    entry_id    TEXT PRIMARY KEY,
+    sheet       TEXT,
+    name        TEXT,
+    chat_id     INTEGER,
+    notified_at REAL,
+    seen_at     REAL,
+    done_at     REAL
+);
 """
 
 
@@ -436,6 +454,97 @@ class Store:
             {"id": r[0], "chat_id": r[1], "fire_at": r[2],
              "title": r[3], "payload": json.loads(r[4] or "{}")}
             for r in rows]
+
+    # --- people directory --------------------------------------------
+    def set_person(self, chat_id: int, name: str) -> None:
+        with self._lock:
+            self._conn.execute(
+                "INSERT INTO people(chat_id, name, updated_at) VALUES (?,?,?) "
+                "ON CONFLICT(chat_id) DO UPDATE SET name=excluded.name, "
+                "updated_at=excluded.updated_at",
+                (chat_id, name.strip(), time.time()))
+            self._conn.commit()
+
+    def remove_person(self, chat_id: int) -> int:
+        with self._lock:
+            cur = self._conn.execute(
+                "DELETE FROM people WHERE chat_id = ?", (chat_id,))
+            self._conn.commit()
+            return cur.rowcount
+
+    def list_people(self) -> list[dict[str, Any]]:
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT chat_id, name FROM people ORDER BY name COLLATE NOCASE"
+            ).fetchall()
+        return [{"chat_id": r[0], "name": r[1]} for r in rows]
+
+    def person_by_name(self, name: str) -> dict[str, Any] | None:
+        """Resolve a typed name to a person (case-insensitive, exact match)."""
+        key = (name or "").strip().lower()
+        if not key:
+            return None
+        for p in self.list_people():
+            if p["name"].strip().lower() == key:
+                return p
+        return None
+
+    def person_name(self, chat_id: int) -> str | None:
+        with self._lock:
+            r = self._conn.execute(
+                "SELECT name FROM people WHERE chat_id = ?", (chat_id,)).fetchone()
+        return r[0] if r else None
+
+    # --- assignments -------------------------------------------------
+    def get_assignment(self, entry_id: str) -> dict[str, Any] | None:
+        with self._lock:
+            r = self._conn.execute(
+                "SELECT entry_id, sheet, name, chat_id, notified_at, seen_at, "
+                "done_at FROM assignments WHERE entry_id = ?", (entry_id,)
+            ).fetchone()
+        if not r:
+            return None
+        return {"entry_id": r[0], "sheet": r[1], "name": r[2], "chat_id": r[3],
+                "notified_at": r[4], "seen_at": r[5], "done_at": r[6]}
+
+    def set_assignment(self, entry_id: str, sheet: str, name: str,
+                       chat_id: int | None) -> None:
+        """Create/replace the assignment for a row (resets notify/seen/done)."""
+        with self._lock:
+            self._conn.execute(
+                "INSERT INTO assignments(entry_id, sheet, name, chat_id) "
+                "VALUES (?,?,?,?) ON CONFLICT(entry_id) DO UPDATE SET "
+                "sheet=excluded.sheet, name=excluded.name, chat_id=excluded.chat_id, "
+                "notified_at=NULL, seen_at=NULL, done_at=NULL",
+                (entry_id, sheet, name, chat_id))
+            self._conn.commit()
+
+    def mark_assignment_notified(self, entry_id: str) -> None:
+        with self._lock:
+            self._conn.execute(
+                "UPDATE assignments SET notified_at=? WHERE entry_id=?",
+                (time.time(), entry_id))
+            self._conn.commit()
+
+    def mark_assignment_seen(self, entry_id: str) -> None:
+        with self._lock:
+            self._conn.execute(
+                "UPDATE assignments SET seen_at=COALESCE(seen_at,?) WHERE entry_id=?",
+                (time.time(), entry_id))
+            self._conn.commit()
+
+    def mark_assignment_done(self, entry_id: str, done: bool) -> None:
+        with self._lock:
+            self._conn.execute(
+                "UPDATE assignments SET done_at=? WHERE entry_id=?",
+                (time.time() if done else None, entry_id))
+            self._conn.commit()
+
+    def clear_assignment(self, entry_id: str) -> None:
+        with self._lock:
+            self._conn.execute(
+                "DELETE FROM assignments WHERE entry_id = ?", (entry_id,))
+            self._conn.commit()
 
     def mark_reminder_fired(self, reminder_id: int) -> None:
         with self._lock:

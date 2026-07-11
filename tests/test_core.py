@@ -231,6 +231,47 @@ def test_merge_dedups_reworded_bullets_and_keeps_good_scalars():
     assert again["catch_points"] == merged["catch_points"] and changed2 is False
 
 
+def test_people_directory_and_assignment_flow():
+    """Map a name → assign a row by typing the name → the assignee is resolved
+    and a notification is queued; ticking Assignee Done records it."""
+    import tempfile
+    from briefer.storage import Store
+    from briefer.sheet_sync import SheetSync
+    s = Store(tempfile.mktemp())
+    s.set_person(999, "John")
+    assert s.person_by_name("john")["chat_id"] == 999
+
+    s.add_entry("e1", 7, "article", "fp1", "RisQ", {"title": "RisQ"}, "k1")
+
+    writes = []
+
+    class Sheets:
+        def worksheet(self, sheet): return None
+        def row_url(self, sheet, row): return f"http://x/{row}"
+        def write_assignee_cells(self, sheet, row, seen=None, done=None):
+            writes.append((seen, done))
+    sync = SheetSync(Sheets(), s, "UTC")
+
+    # "pass it to John" resolves to person 999
+    assert sync._resolve_assignee("pass it to John")["chat_id"] == 999
+    notify = []
+    entry = s.entry_by_fingerprint("fp1")
+    sync._handle_assignee("article", entry, 5, "John", False, "", notify)
+    assert len(notify) == 1 and notify[0]["chat_id"] == 999
+    assert s.get_assignment("e1")["chat_id"] == 999
+
+    # unknown name → flagged, no notification
+    s.clear_assignment("e1"); notify.clear()
+    sync._handle_assignee("article", entry, 5, "Nobody", False, "", notify)
+    assert not notify and any("not mapped" in (w[0] or "") for w in writes)
+
+    # re-assign to John, then tick Assignee Done in the sheet → recorded
+    sync._handle_assignee("article", entry, 5, "John", False, "", notify)
+    sync._handle_assignee("article", entry, 5, "John", True, "", notify)
+    assert s.get_assignment("e1")["done_at"] is not None
+    s.close()
+
+
 def test_first_empty_row_fills_from_top_and_skips_manual_rows():
     """New rows go into the first *fully* blank row — skipping any row the user
     filled in by hand (content in any column), never overwriting it."""

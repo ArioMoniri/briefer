@@ -138,7 +138,11 @@ def _appended_row_number(resp: Any) -> int | None:
 # At/Time; NOTES and MY TAGS are yours to fill and are never overwritten (a
 # cumulative re-submission only rewrites the data columns).
 _TRAILING = ["Image", "ID", "Done", "Checked At", "Time→Check (h)",
-             "Notes", "My Tags", "Remind At", "Status"]
+             "Notes", "My Tags", "Remind At", "Status",
+             # Assignment: type a name in Assignee (dropdown of your people);
+             # they get pinged. Assignee Done is *their* checkbox; Seen tracks
+             # whether they acknowledged the ping.
+             "Assignee", "Assignee Done", "Seen"]
 
 _ARTICLE_DATA = [
     "Captured At", "Title", "Type", "Summary", "Catch Points",
@@ -165,6 +169,8 @@ def _control_cols(headers: list[str]) -> dict[str, int]:
         "checked_at": col("Checked At"), "time": col("Time→Check (h)"),
         "notes": col("Notes"), "tags": col("My Tags"),
         "remind_at": col("Remind At"), "status": col("Status"),
+        "assignee": col("Assignee"), "assignee_done": col("Assignee Done"),
+        "seen": col("Seen"),
     }
 
 
@@ -319,8 +325,9 @@ class SheetsClient:
         headers = EVENT_HEADERS if sheet == "event" else ARTICLE_HEADERS
         cols = _control_cols(headers)
         # Trailing: Image, ID, Done, Checked At, Time, Notes, My Tags, Remind
-        # At, Status. Done left blank; _make_checkbox sets a real boolean.
-        row = data + ["", entry_id, "", "", "", "", "", "", status]
+        # At, Status, Assignee, Assignee Done, Seen. Checkboxes left blank;
+        # _make_checkbox sets a real boolean.
+        row = data + ["", entry_id, "", "", "", "", "", "", status, "", "", ""]
         rownum = self._first_empty_row(ws)
         if rownum:
             # Write into the first empty row so content fills from the top.
@@ -338,6 +345,7 @@ class SheetsClient:
         self._save_image(ws, rownum, cols["image"], images)
         if rownum:
             self._make_checkbox(ws, rownum, cols["done"])
+            self._make_checkbox(ws, rownum, cols["assignee_done"])
         return rownum
 
     def append_article(self, a, source, user, images=None, entry_id="",
@@ -369,7 +377,7 @@ class SheetsClient:
         for sheet in ("article", "event"):
             try:
                 ws = self.worksheet(sheet)
-                flag = f"fmt_v2_{ws.spreadsheet.id}"
+                flag = f"fmt_v3_{ws.spreadsheet.id}"   # v3: + Assignee columns
                 if store is not None and store.get_meta(flag):
                     continue
                 headers = EVENT_HEADERS if sheet == "event" else ARTICLE_HEADERS
@@ -391,11 +399,12 @@ class SheetsClient:
                                           "values": [{"userEnteredValue": word}]},
                             "format": {"backgroundColor":
                                        {"red": r, "green": g, "blue": b}}}}}})
-                # Done: checkbox across the whole column (upgrades old rows).
-                reqs.append({"setDataValidation": {
-                    "range": colrange(cols["done"]),
-                    "rule": {"condition": {"type": "BOOLEAN"},
-                             "showCustomUi": True, "strict": False}}})
+                # Done + Assignee Done: checkboxes across the whole column.
+                for c in ("done", "assignee_done"):
+                    reqs.append({"setDataValidation": {
+                        "range": colrange(cols[c]),
+                        "rule": {"condition": {"type": "BOOLEAN"},
+                                 "showCustomUi": True, "strict": False}}})
                 ws.spreadsheet.batch_update({"requests": reqs})
 
                 # Remind At: date PICKER + datetime format (separate batch so a
@@ -420,6 +429,63 @@ class SheetsClient:
                          "%s sheet", sheet)
             except Exception as exc:  # noqa: BLE001
                 log.warning("could not apply formatting: %s", exc)
+        # Populate the Assignee dropdown from the people directory.
+        if store is not None:
+            try:
+                self.set_assignee_dropdown(
+                    [p["name"] for p in store.list_people()])
+            except Exception as exc:  # noqa: BLE001
+                log.warning("assignee dropdown not applied: %s", exc)
+
+    def set_assignee_dropdown(self, names: list[str]) -> None:
+        """Show a dropdown of your people on the Assignee column (both sheets).
+        strict=False so free text like 'pass it to John' is still accepted."""
+        for sheet in ("article", "event"):
+            try:
+                ws = self.worksheet(sheet)
+                headers = EVENT_HEADERS if sheet == "event" else ARTICLE_HEADERS
+                col = _control_cols(headers)["assignee"]
+                rng = {"sheetId": ws.id, "startRowIndex": 1, "endRowIndex": 50000,
+                       "startColumnIndex": col - 1, "endColumnIndex": col}
+                if names:
+                    rule = {"setDataValidation": {"range": rng, "rule": {
+                        "condition": {"type": "ONE_OF_LIST",
+                                      "values": [{"userEnteredValue": n} for n in names]},
+                        "showCustomUi": True, "strict": False}}}
+                else:  # no people yet → clear any old dropdown
+                    rule = {"setDataValidation": {"range": rng}}
+                ws.spreadsheet.batch_update({"requests": [rule]})
+            except Exception as exc:  # noqa: BLE001
+                log.warning("assignee dropdown (%s) failed: %s", sheet, exc)
+
+    def write_assignee_cells(self, sheet: str, rownum: int,
+                             seen: str | None = None,
+                             done: bool | None = None) -> None:
+        """Write back the Seen text and/or the Assignee Done checkbox."""
+        ws = self.worksheet(sheet)
+        headers = EVENT_HEADERS if sheet == "event" else ARTICLE_HEADERS
+        cols = _control_cols(headers)
+        reqs = []
+        if seen is not None:
+            reqs.append({"updateCells": {
+                "range": {"sheetId": ws.id, "startRowIndex": rownum - 1,
+                          "endRowIndex": rownum, "startColumnIndex": cols["seen"] - 1,
+                          "endColumnIndex": cols["seen"]},
+                "rows": [{"values": [{"userEnteredValue": {"stringValue": seen}}]}],
+                "fields": "userEnteredValue"}})
+        if done is not None:
+            reqs.append({"repeatCell": {
+                "range": {"sheetId": ws.id, "startRowIndex": rownum - 1,
+                          "endRowIndex": rownum,
+                          "startColumnIndex": cols["assignee_done"] - 1,
+                          "endColumnIndex": cols["assignee_done"]},
+                "cell": {"userEnteredValue": {"boolValue": bool(done)}},
+                "fields": "userEnteredValue"}})
+        if reqs:
+            try:
+                ws.spreadsheet.batch_update({"requests": reqs})
+            except Exception as exc:  # noqa: BLE001
+                log.warning("write_assignee_cells failed: %s", exc)
 
     def archive_entry(self, sheet: str, entry: dict) -> None:
         """When a row is deleted, keep a copy in a 'Deleted' tab so it can be

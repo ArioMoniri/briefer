@@ -7,6 +7,13 @@ date-stamped entries rather than semantic version tags.
 ## [Unreleased]
 
 ### Added
+- 👥 **Row assignments** — a **People directory** (`/people`, `/name <id>
+  <name>`, `/unname <id>`) maps names to chat ids. Type a name in a row's new
+  **Assignee** column (dropdown of your people; free text like "pass it to
+  John" also resolves) and that person gets a Telegram ping with **👀 Seen** /
+  **✅ Mark checked** buttons. New **Assignee Done** checkbox (theirs) and
+  **Seen** column (acknowledgement time) round-trip between Telegram and the
+  sheet. (Telegram has no true read-receipts, so *Seen* = they tapped 👀.)
 - 📅 **Real calendar view** — `/calendar` now draws a month grid built from the
   actual article deadlines and event dates (one marker each), with ◀ / Today /
   ▶ navigation, plus a **🌐 "Open full calendar" button** that sends a
