@@ -104,16 +104,20 @@ class BrieferBot:
             await update.message.delete()
         except Exception:  # noqa: BLE001
             pass
+        # The user's message was just deleted, so send fresh messages
+        # (a reply-to would target a now-missing message and can 400).
         if not supplied:
-            await self._reply(update, "Usage: `/login <password>` (your message is auto-deleted).")
+            await ctx.bot.send_message(
+                chat.id, "Usage: /login <password> (your message is auto-deleted).")
             return
         if verify_password(supplied, self._pw_salt, self._pw_hash):
             self.store.set_authed(chat.id)
-            await self._reply(update, "✅ Logged in. Send me anything to analyse.",
-                              keyboard=menus.main_menu())
+            await ctx.bot.send_message(
+                chat.id, "✅ Logged in. Send me anything to analyse.",
+                reply_markup=menus.main_menu())
         else:
             await asyncio.sleep(1.0)  # slow brute force
-            await self._reply(update, "❌ Wrong password.")
+            await ctx.bot.send_message(chat.id, "❌ Wrong password.")
 
     async def cmd_logout(self, update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         chat = update.effective_chat
