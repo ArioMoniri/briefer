@@ -358,6 +358,29 @@ def test_error_message_classifier():
     assert not infra2 and "boom" in msg2
 
 
+def test_semantic_dedup_key():
+    from briefer.pipeline import _dedup_key
+    k1 = _dedup_key("event", {"title": "SIMYA Industrial AI Demo Day",
+                              "event_date": "2026-11-04"})
+    k2 = _dedup_key("event", {"title": "simya  industrial ai DEMO day!",
+                              "application_deadline": "2026-11-04T09:00"})
+    assert k1 == k2  # same event, different submission → same key
+    ka = _dedup_key("article", {"title": "RisQ", "entities": ["Daniel Rueckert"]})
+    assert ka.startswith("article|risq")
+
+
+def test_apply_link_extraction():
+    from briefer.enrich import Enricher
+    e = Enricher(1000)
+    html = ('<a href="/apply-now/">Hemen Başvur</a>'
+            '<a href="https://lu.ma/x">Register</a>'
+            '<a href="/about">About</a>')
+    links = e._apply_links(html, "https://simya.vc/industrial-ai-day/")
+    assert "https://simya.vc/apply-now/" in links
+    assert "https://lu.ma/x" in links
+    assert not any("/about" in u for u in links)
+
+
 def test_guess_media_type():
     from briefer.media import guess_media_type
     assert guess_media_type(b"\xff\xd8\xff\xe0xx") == "image/jpeg"

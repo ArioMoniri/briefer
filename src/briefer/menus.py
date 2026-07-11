@@ -45,6 +45,7 @@ HELP = (
     "/event <text> – force-classify as event\n"
     "/sheets – links to the two Google Sheets\n"
     "/deadlines – upcoming event deadlines I'm tracking\n"
+    "/calendar – a calendar view of all your reminders\n"
     "/status – bot health + your sheet links\n"
     "/logs – recent logs / errors (admin)\n"
     "/login <password> – authenticate this chat\n"

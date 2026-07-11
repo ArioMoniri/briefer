@@ -49,10 +49,14 @@ class EnrichedContent:
     luma_urls: list[str] = field(default_factory=list)
     attachments: list[Attachment] = field(default_factory=list)
     notes: list[str] = field(default_factory=list)
+    apply_links: list[str] = field(default_factory=list)  # apply/register buttons
 
     def as_source_block(self, per_source_limit: int = 6000) -> str:
         """Flatten everything into a single text block for the model."""
         parts: list[str] = []
+        if self.apply_links:
+            parts.append("=== APPLY / REGISTER LINKS (buttons found on the page) "
+                         "===\n" + "\n".join(dict.fromkeys(self.apply_links)))
         if self.raw_text:
             parts.append("=== MESSAGE TEXT ===\n" + self.raw_text)
         for url, txt in self.link_texts.items():
@@ -165,6 +169,33 @@ class Enricher:
             return None
         log.warning("Too many redirects for %s", url)
         return None
+
+    def _apply_links(self, html: str, base_url: str) -> list[str]:
+        """Find apply/register/CTA links (e.g. 'Hemen Başvur', 'Apply', a Luma
+        or Typeform/Eventbrite/Google-Forms link) — these are usually buttons
+        whose href never appears in the visible text."""
+        soup = BeautifulSoup(html, "html.parser")
+        out: list[str] = []
+        text_kw = re.compile(
+            r"apply|register|başvur|basvur|sign\s?up|join|kayıt|kayit|ticket|"
+            r"rsvp|submit|get\s?started|katıl", re.IGNORECASE)
+        href_kw = re.compile(
+            r"(typeform\.com|lu\.ma|luma\.com|eventbrite\.|docs\.google\.com/forms|"
+            r"forms\.gle|airtable\.com|form\.jotform|apply|register|application|"
+            r"başvur|basvur|/rsvp|tally\.so)", re.IGNORECASE)
+        for a in soup.find_all("a", href=True):
+            href = a["href"].strip()
+            if not href or href.startswith(("#", "mailto:", "javascript:", "tel:")):
+                continue
+            label = a.get_text(" ").strip()
+            if text_kw.search(label) or href_kw.search(href):
+                try:
+                    full = urljoin(base_url, href)
+                except Exception:  # noqa: BLE001
+                    continue
+                if full.startswith(("http://", "https://")):
+                    out.append(full)
+        return list(dict.fromkeys(out))[:8]
 
     def _extract_html_text(self, html: str) -> str:
         soup = BeautifulSoup(html, "html.parser")
@@ -394,6 +425,7 @@ class Enricher:
             content.link_texts[url] = _pdf_to_text(resp.content)
         elif "text/html" in ctype or "text/plain" in ctype or not ctype:
             text = self._extract_html_text(resp.text)
+            content.apply_links.extend(self._apply_links(resp.text, url))
             # Thin result (JS page / login wall) → try the headless browser.
             if len(text) < 400:
                 rendered = self._browser_render(url)

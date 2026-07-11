@@ -303,6 +303,35 @@ class BrieferBot:
             lines.append(f"• {html.escape(r['title'])} — poke at {when}")
         await self._reply(update, "\n".join(lines), parse_mode=ParseMode.HTML)
 
+    async def cmd_calendar(self, update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+        """A calendar-style view of all upcoming reminders, grouped by day."""
+        if not await self._require_auth(update):
+            return
+        now = time.time()
+        rem = self.store.upcoming_reminders(
+            update.effective_chat.id, now, 365 * 86400)
+        if not rem:
+            await self._reply(update, "🗓 No upcoming reminders. Set one by "
+                              "replying `remind me <when>`, or add a deadline/"
+                              "event, or fill the sheet's *Remind At* column.")
+            return
+        rem.sort(key=lambda r: r["fire_at"])
+        icons = {"deadline": "⏰", "event_date": "📅", "custom": "🔔"}
+        by_day: dict[str, list[str]] = {}
+        for r in rem[:60]:
+            dt = datetime.fromtimestamp(r["fire_at"])
+            day = dt.strftime("%a %Y-%m-%d")
+            kind = (r["payload"] or {}).get("kind", "custom")
+            label = (r["payload"] or {}).get("title", r["title"])
+            line = (f"  • {dt.strftime('%H:%M')} {icons.get(kind, '🔔')} "
+                    f"{html.escape(str(label)[:60])}")
+            by_day.setdefault(day, []).append(line)
+        out = ["🗓 <b>Upcoming reminders</b>"]
+        for day, lines in by_day.items():
+            out.append(f"\n<b>{day}</b>")
+            out.extend(lines)
+        await self._reply(update, "\n".join(out), parse_mode=ParseMode.HTML)
+
     async def cmd_cancel(self, update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         ctx.user_data.pop("force_kind", None)
         await self._reply(update, "Cancelled. Send new content any time.")
@@ -592,10 +621,14 @@ class BrieferBot:
             self.store.set_meta(f"{result.kind}_last_row", result.sheet_row)
         self.store.finish_job(job["id"], "done")
 
-        # Schedule reminders only for brand-new events (updates keep theirs).
-        if result.kind == "event" and not result.updated:
+        if result.kind == "event":
+            # On a merge, cancel the old reminders first so an updated deadline
+            # doesn't leave stale/duplicate ones, then (re)schedule fresh.
+            if result.updated and result.entry_id:
+                self.store.cancel_entry_reminders(result.entry_id)
             self._schedule_event_reminders(chat_id, result)
-            await self._send_calendar(bot, chat_id, result)
+            if not result.updated:
+                await self._send_calendar(bot, chat_id, result)
 
         # Inline "remind me <when>" directive in the submission text → a custom
         # reminder for this entry (works for articles too).
@@ -968,6 +1001,7 @@ BOT_COMMANDS = [
     ("event", "File the next item as an event"),
     ("sheets", "Links to your two Google Sheets"),
     ("deadlines", "Upcoming event deadlines"),
+    ("calendar", "Calendar view of all reminders"),
     ("status", "Bot health & sheet links"),
     ("logs", "Recent logs (admin)"),
     ("allow", "Allow a chat id (admin)"),
@@ -1014,6 +1048,8 @@ def build_application(cfg: Config, bot: BrieferBot) -> Application:
     app.add_handler(CommandHandler("logs", bot.cmd_logs))
     app.add_handler(CommandHandler("sheets", bot.cmd_sheets))
     app.add_handler(CommandHandler("deadlines", bot.cmd_deadlines))
+    app.add_handler(CommandHandler("calendar", bot.cmd_calendar))
+    app.add_handler(CommandHandler("reminders", bot.cmd_calendar))
     app.add_handler(CommandHandler("cancel", bot.cmd_cancel))
     app.add_handler(CommandHandler(
         "article", lambda u, c: bot.cmd_force("article", u, c)))

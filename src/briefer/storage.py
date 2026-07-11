@@ -97,6 +97,17 @@ class Store:
             self._conn.execute("ALTER TABLE entries ADD COLUMN sheet_remind_at REAL")
         except sqlite3.OperationalError:
             pass
+        # Semantic dedup key (normalized title+date) so the same event/article
+        # submitted differently (image vs link) merges instead of duplicating.
+        try:
+            self._conn.execute("ALTER TABLE entries ADD COLUMN dedup_key TEXT")
+        except sqlite3.OperationalError:
+            pass
+        try:
+            self._conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_entries_key ON entries (dedup_key)")
+        except sqlite3.OperationalError:
+            pass
         self._conn.commit()
 
     # --- sessions ----------------------------------------------------
@@ -258,22 +269,37 @@ class Store:
 
     # --- entries (stable per-row records) ----------------------------
     def add_entry(self, entry_id: str, chat_id: int, sheet: str,
-                  fingerprint: str, title: str, analysis: dict[str, Any]) -> None:
+                  fingerprint: str, title: str, analysis: dict[str, Any],
+                  dedup_key: str = "") -> None:
         with self._lock:
             self._conn.execute(
                 "INSERT OR REPLACE INTO entries(id, chat_id, sheet, fingerprint, "
-                "title, analysis, created_at, checked_at, removed, updated_at) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, NULL, 0, ?)",
+                "title, analysis, created_at, checked_at, removed, updated_at, "
+                "dedup_key) VALUES (?, ?, ?, ?, ?, ?, ?, NULL, 0, ?, ?)",
                 (entry_id, chat_id, sheet, fingerprint, title,
-                 json.dumps(analysis), time.time(), time.time()),
+                 json.dumps(analysis), time.time(), time.time(), dedup_key),
             )
             self._conn.commit()
+
+    _SELECT = ("SELECT id, chat_id, sheet, fingerprint, title, analysis, "
+               "created_at, checked_at, removed, sheet_remind_at, dedup_key "
+               "FROM entries ")
 
     def _entry_row(self, r) -> dict[str, Any]:
         return {"id": r[0], "chat_id": r[1], "sheet": r[2], "fingerprint": r[3],
                 "title": r[4], "analysis": json.loads(r[5] or "{}"),
                 "created_at": r[6], "checked_at": r[7], "removed": r[8],
-                "sheet_remind_at": r[9] if len(r) > 9 else None}
+                "sheet_remind_at": r[9] if len(r) > 9 else None,
+                "dedup_key": r[10] if len(r) > 10 else None}
+
+    def entry_by_key(self, dedup_key: str) -> dict[str, Any] | None:
+        if not dedup_key:
+            return None
+        with self._lock:
+            r = self._conn.execute(
+                self._SELECT + "WHERE dedup_key = ? AND removed = 0 "
+                "ORDER BY created_at LIMIT 1", (dedup_key,)).fetchone()
+        return self._entry_row(r) if r else None
 
     def set_entry_sheet_remind(self, entry_id: str, ts: float | None) -> None:
         with self._lock:
@@ -285,18 +311,15 @@ class Store:
     def entry_by_fingerprint(self, fp: str) -> dict[str, Any] | None:
         with self._lock:
             r = self._conn.execute(
-                "SELECT id, chat_id, sheet, fingerprint, title, analysis, "
-                "created_at, checked_at, removed, sheet_remind_at FROM entries "
-                "WHERE fingerprint = ? AND removed = 0 ORDER BY created_at LIMIT 1",
-                (fp,)).fetchone()
+                self._SELECT + "WHERE fingerprint = ? AND removed = 0 "
+                "ORDER BY created_at LIMIT 1", (fp,)).fetchone()
         return self._entry_row(r) if r else None
 
     def active_entries(self, sheet: str) -> list[dict[str, Any]]:
         with self._lock:
             rows = self._conn.execute(
-                "SELECT id, chat_id, sheet, fingerprint, title, analysis, "
-                "created_at, checked_at, removed, sheet_remind_at FROM entries "
-                "WHERE sheet = ? AND removed = 0", (sheet,)).fetchall()
+                self._SELECT + "WHERE sheet = ? AND removed = 0",
+                (sheet,)).fetchall()
         return [self._entry_row(r) for r in rows]
 
     def update_entry_analysis(self, entry_id: str, analysis: dict[str, Any],
