@@ -237,7 +237,7 @@ def architecture():
     b.append(arrow(174, 272, 244, 272, curve=0))
 
     # container ("Briefer's image" in the reference)
-    b.append(f'<path d="{_rough_rect(244, 44, 660, 452, r=24, seed=11, jitter=2.4)}" '
+    b.append(f'<path d="{_rough_rect(244, 44, 660, 452, r=24, seed=11, jitter=1.4)}" '
              f'fill="#171a21" stroke="{LINE}" stroke-width="2.4"/>')
     b.append(text(272, 78, "Briefer’s server", size=18, color=MUTED))
     b.append(text(272, 99, "venv · tmux / systemd · self-healing", size=14, color=MUTED))
@@ -288,7 +288,7 @@ def architecture():
 def pipeline():
     W, H = 580, 640
     b = []
-    b.append(f'<path d="{_rough_rect(140, 20, 300, 600, r=22, seed=30, jitter=2.4)}" '
+    b.append(f'<path d="{_rough_rect(140, 20, 300, 600, r=22, seed=30, jitter=1.4)}" '
              f'fill="#171a21" stroke="{LINE}" stroke-width="2.4"/>')
     b.append(text(W / 2, 52, "One submission,", size=19, color=INK, anchor="middle"))
     b.append(text(W / 2, 74, "step by step", size=19, color=INK, anchor="middle"))
@@ -311,9 +311,10 @@ def pipeline():
         if i < len(steps) - 1:
             b.append(arrow(x + w / 2, y + bh + 1, x + w / 2, y + bh + gap - 1,
                            seed=50 + i))
-    b.append(_db(158, 592, 20))
-    b.append(text(186, 608, "queued in SQLite · resumes after a restart",
-                  size=13, color=MUTED))
+    cxc = 140 + 300 / 2  # container centre
+    b.append(_db(cxc - 118, 592, 19))
+    b.append(text(cxc + 8, 607, "queued · resumes after restart",
+                  size=13, color=MUTED, anchor="middle"))
     return svg(W, H, "\n".join(b))
 
 

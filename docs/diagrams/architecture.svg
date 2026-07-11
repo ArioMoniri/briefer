@@ -9,7 +9,7 @@
 <path d="M 173.7 272.3 Q 208.4 273.0 243.5 273.0" fill="none" stroke="#aab2c5" stroke-width="2.2" stroke-linecap="round"/>
 <path d="M 244.0 272.0 L 233.2 277.2" stroke="#aab2c5" stroke-width="2.2" stroke-linecap="round"/>
 <path d="M 244.0 272.0 L 232.9 267.4" stroke="#aab2c5" stroke-width="2.2" stroke-linecap="round"/>
-<path d="M 268.0 44.0 Q 574.0 45.9 880.0 44.0 Q 904.0 44.0 904.0 68.0 Q 903.0 270.0 904.0 472.0 Q 904.0 496.0 880.0 496.0 Q 574.0 494.1 268.0 496.0 Q 244.0 496.0 244.0 472.0 Q 242.7 270.0 244.0 68.0 Q 244.0 44.0 268.0 44.0 Z" fill="#171a21" stroke="#3a4150" stroke-width="2.4"/>
+<path d="M 268.0 44.0 Q 574.0 45.1 880.0 44.0 Q 904.0 44.0 904.0 68.0 Q 903.4 270.0 904.0 472.0 Q 904.0 496.0 880.0 496.0 Q 574.0 494.9 268.0 496.0 Q 244.0 496.0 244.0 472.0 Q 243.2 270.0 244.0 68.0 Q 244.0 44.0 268.0 44.0 Z" fill="#171a21" stroke="#3a4150" stroke-width="2.4"/>
 <text x="272" y="78" fill="#9099ad" font-size="18" text-anchor="start">Briefer’s server</text>
 <text x="272" y="99" fill="#9099ad" font-size="14" text-anchor="start">venv · tmux / systemd · self-healing</text>
 <line x1="588" y1="118" x2="588" y2="470" stroke="#3a4150" stroke-width="1.8" stroke-dasharray="3 8"/>
