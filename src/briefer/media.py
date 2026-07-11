@@ -374,7 +374,10 @@ class VideoTranscriber:
         try:
             self._ytdlp(url, out)
         except Exception as exc:  # noqa: BLE001
-            log.warning("yt-dlp failed for %s: %s", url, exc)
+            # Expected for non-video pages (e.g. a LinkedIn text post) — the
+            # HTML/browser fallback handles those. Keep it quiet.
+            log.info("yt-dlp found no video for %s (%s)", url,
+                     str(exc).splitlines()[0][:120])
             if not out["transcript"]:
                 out["note"] = out["note"] or "could not fetch/transcribe video"
         return out

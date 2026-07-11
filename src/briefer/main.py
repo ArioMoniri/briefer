@@ -107,6 +107,11 @@ def main() -> int:
     except Exception:  # noqa: BLE001
         pass
 
+    try:
+        sheets.ensure_formatting(store)  # colored Status tags
+    except Exception as exc:  # noqa: BLE001
+        log.warning("status formatting skipped: %s", exc)
+
     pipeline = Pipeline(cfg, llm, enricher, sheets, store)
     bot = BrieferBot(cfg, pipeline, store)
     app = build_application(cfg, bot)

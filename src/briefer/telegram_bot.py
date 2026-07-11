@@ -243,6 +243,23 @@ class BrieferBot:
             preview=True, parse_mode=ParseMode.HTML,
         )
 
+    async def cmd_stats(self, update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+        if not await self._require_auth(update):
+            return
+
+        def block(name: str, sheet: str) -> str:
+            s = self.store.entry_stats(sheet)
+            return (f"<b>{name}</b>\n"
+                    f"  Total: {s['total']} · Done: {s['checked']} · "
+                    f"Removed: {s['removed']}\n"
+                    f"  Avg time to check: {s['avg_check_hours']} h")
+
+        await self._reply(
+            update,
+            "📊 <b>Statistics</b>\n" + block("Articles", "article")
+            + "\n" + block("Events", "event"),
+            parse_mode=ParseMode.HTML)
+
     async def cmd_logs(self, update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         """Admin: show recent log lines. `/logs` = last 30, `/logs errors`
         = recent errors/warnings, `/logs 60` = last 60 lines."""
@@ -1016,6 +1033,7 @@ BOT_COMMANDS = [
     ("deadlines", "Upcoming event deadlines"),
     ("calendar", "Calendar view of all reminders"),
     ("status", "Bot health & sheet links"),
+    ("stats", "Totals, checked, removed, avg time-to-check"),
     ("logs", "Recent logs (admin)"),
     ("allow", "Allow a chat id (admin)"),
     ("deny", "Remove a chat id (admin)"),
@@ -1060,6 +1078,7 @@ def build_application(cfg: Config, bot: BrieferBot) -> Application:
     app.add_handler(CommandHandler("deny", bot.cmd_deny))
     app.add_handler(CommandHandler("allowlist", bot.cmd_allowlist))
     app.add_handler(CommandHandler("status", bot.cmd_status))
+    app.add_handler(CommandHandler("stats", bot.cmd_stats))
     app.add_handler(CommandHandler("logs", bot.cmd_logs))
     app.add_handler(CommandHandler("sheets", bot.cmd_sheets))
     app.add_handler(CommandHandler("deadlines", bot.cmd_deadlines))

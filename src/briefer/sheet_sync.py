@@ -100,12 +100,17 @@ class SheetSync:
         for entry in self.store.active_entries(sheet):
             eid = entry["id"]
             if eid not in present:
-                # Row deleted by the user → never remind again.
+                # Row deleted by the user → archive it (recoverable), stop
+                # reminders, mark removed.
+                try:
+                    self.sheets.archive_entry(sheet, entry)
+                except Exception:  # noqa: BLE001
+                    pass
                 self.store.mark_entry_removed(eid)
                 self.store.cancel_entry_reminders(eid)
                 self.store.incr_meta(f"{sheet}_removed_total", 1)
-                log.info("Entry %s deleted from %s sheet — reminders cancelled",
-                         eid, sheet)
+                log.info("Entry %s deleted from %s sheet — archived + reminders "
+                         "cancelled", eid, sheet)
                 continue
             rnum, done, remind_raw, cur_status = present[eid]
             # Live colored status tag (time urgency), consistent across sheets.

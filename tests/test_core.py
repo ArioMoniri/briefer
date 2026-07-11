@@ -253,6 +253,7 @@ def test_entries_and_checkbox_sync():
             def write_check_cells(self, sheet, r, iso, h): self.check.append((r, h))
             def write_stats(self, sheet, st): pass
             def write_status(self, sheet, r, tag): pass
+            def archive_entry(self, sheet, entry): pass
 
         # Checked → checked_at set + reminders cancelled.
         fake = FakeSheets([EVENT_HEADERS, row])

@@ -311,6 +311,66 @@ class SheetsClient:
         return self._append("event", self._event_data(e, source, user),
                             entry_id, images, status)
 
+    # --- colored Status tags via conditional formatting --------------
+    def ensure_formatting(self, store) -> None:
+        """Apply background-color rules to the Status column so the tags render
+        as colored cells (once per spreadsheet, tracked via a meta flag)."""
+        rules = [
+            ("Passed", (0.96, 0.80, 0.80)),      # red
+            ("Due soon", (1.0, 0.87, 0.72)),     # orange
+            ("Coming up", (1.0, 0.97, 0.75)),    # yellow
+            ("Upcoming", (0.83, 0.93, 0.83)),    # green
+            ("New", (0.83, 0.93, 0.83)),         # green
+            ("Done", (0.80, 0.92, 0.86)),        # teal-green
+            ("No date", (0.90, 0.90, 0.90)),     # gray
+        ]
+        for sheet in ("article", "event"):
+            try:
+                ws = self.worksheet(sheet)
+                sid = ws.spreadsheet.id
+                flag = f"cf_status_v1_{sid}"
+                if store is not None and store.get_meta(flag):
+                    continue
+                headers = EVENT_HEADERS if sheet == "event" else ARTICLE_HEADERS
+                col = _control_cols(headers)["status"]
+                grid = {"sheetId": ws.id, "startRowIndex": 1,
+                        "startColumnIndex": col - 1, "endColumnIndex": col}
+                reqs = []
+                for i, (word, (r, g, b)) in enumerate(rules):
+                    reqs.append({"addConditionalFormatRule": {"index": i, "rule": {
+                        "ranges": [grid],
+                        "booleanRule": {
+                            "condition": {"type": "TEXT_CONTAINS",
+                                          "values": [{"userEnteredValue": word}]},
+                            "format": {"backgroundColor":
+                                       {"red": r, "green": g, "blue": b}}}}}})
+                ws.spreadsheet.batch_update({"requests": reqs})
+                if store is not None:
+                    store.set_meta(flag, "1")
+                log.info("Applied Status color rules to %s sheet", sheet)
+            except Exception as exc:  # noqa: BLE001
+                log.warning("could not apply status formatting: %s", exc)
+
+    def archive_entry(self, sheet: str, entry: dict) -> None:
+        """When a row is deleted, keep a copy in a 'Deleted' tab so it can be
+        recovered."""
+        try:
+            ss = self.worksheet(sheet).spreadsheet
+            try:
+                arch = ss.worksheet("Deleted")
+            except gspread.WorksheetNotFound:
+                arch = ss.add_worksheet(title="Deleted", rows=200, cols=6)
+                arch.update([["Deleted At", "Type", "Title", "Summary",
+                              "ID", "Full Data (JSON)"]], "A1")
+            a = entry.get("analysis") or {}
+            when = datetime.now(timezone.utc).astimezone().isoformat(timespec="seconds")
+            arch.append_row(
+                [when, sheet, _fmt(a.get("title")), _fmt(a.get("summary")),
+                 entry.get("id", ""), json.dumps(a, ensure_ascii=False)[:40000]],
+                value_input_option="RAW")
+        except Exception as exc:  # noqa: BLE001
+            log.warning("archive_entry failed: %s", exc)
+
     def write_status(self, sheet: str, rownum: int, tag: str) -> None:
         ws = self.worksheet(sheet)
         headers = EVENT_HEADERS if sheet == "event" else ARTICLE_HEADERS
