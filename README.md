@@ -33,7 +33,7 @@ designed so the bot can't be used to attack the server.
 ## How it fits together 🧩
 
 <p align="center">
-  <img src="docs/diagrams/architecture.png" alt="Briefer architecture: a Telegram bot on your server talking to Claude, Google Sheets and the web" width="100%">
+  <img src="docs/diagrams/architecture-2.png" alt="Briefer architecture: a Telegram bot on your server talking to Claude, Google Sheets and the web" width="100%">
 </p>
 
 One bot process on your server (in a venv, under tmux or systemd) does all the
@@ -44,7 +44,7 @@ search). State lives in a local SQLite database, so the queue and reminders
 survive restarts.
 
 <p align="center">
-  <img src="docs/diagrams/pipeline.png" alt="Briefer pipeline: enrich, classify, analyse, verify, enrich, write, notify" width="440">
+  <img src="docs/diagrams/pipeline-2.png" alt="Briefer pipeline: enrich, classify, analyse, verify, enrich, write, notify" width="440">
 </p>
 
 Every item is queued and processed one at a time, so nothing is dropped and
