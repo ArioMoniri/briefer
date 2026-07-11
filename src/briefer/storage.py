@@ -59,6 +59,23 @@ CREATE TABLE IF NOT EXISTS meta (
     key   TEXT PRIMARY KEY,
     value TEXT
 );
+-- One row per sheet entry, keyed by a stable UUID also written to the sheet's
+-- ID column. Lets us survive row deletion/reordering, update cumulatively, and
+-- track the checkbox / time-to-check independent of the moving row number.
+CREATE TABLE IF NOT EXISTS entries (
+    id           TEXT PRIMARY KEY,   -- uuid, mirrored in the sheet ID column
+    chat_id      INTEGER,
+    sheet        TEXT,               -- 'article' | 'event'
+    fingerprint  TEXT,
+    title        TEXT,
+    analysis     TEXT,               -- merged analysis JSON (for cumulative merge)
+    created_at   REAL NOT NULL,
+    checked_at   REAL,               -- when Done first seen TRUE; NULL otherwise
+    removed      INTEGER NOT NULL DEFAULT 0,
+    updated_at   REAL
+);
+CREATE INDEX IF NOT EXISTS idx_entries_fp ON entries (fingerprint);
+CREATE INDEX IF NOT EXISTS idx_entries_sheet ON entries (sheet, removed);
 """
 
 
@@ -68,6 +85,12 @@ class Store:
         self._conn = sqlite3.connect(str(path), check_same_thread=False)
         self._conn.execute("PRAGMA journal_mode=WAL;")
         self._conn.executescript(_SCHEMA)
+        # Migration: link reminders to an entry so we can cancel them when the
+        # row is checked/deleted (older DBs won't have the column).
+        try:
+            self._conn.execute("ALTER TABLE reminders ADD COLUMN entry_id TEXT")
+        except sqlite3.OperationalError:
+            pass
         self._conn.commit()
 
     # --- sessions ----------------------------------------------------
@@ -227,17 +250,100 @@ class Store:
             self._conn.commit()
             return cur
 
+    # --- entries (stable per-row records) ----------------------------
+    def add_entry(self, entry_id: str, chat_id: int, sheet: str,
+                  fingerprint: str, title: str, analysis: dict[str, Any]) -> None:
+        with self._lock:
+            self._conn.execute(
+                "INSERT OR REPLACE INTO entries(id, chat_id, sheet, fingerprint, "
+                "title, analysis, created_at, checked_at, removed, updated_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, NULL, 0, ?)",
+                (entry_id, chat_id, sheet, fingerprint, title,
+                 json.dumps(analysis), time.time(), time.time()),
+            )
+            self._conn.commit()
+
+    def _entry_row(self, r) -> dict[str, Any]:
+        return {"id": r[0], "chat_id": r[1], "sheet": r[2], "fingerprint": r[3],
+                "title": r[4], "analysis": json.loads(r[5] or "{}"),
+                "created_at": r[6], "checked_at": r[7], "removed": r[8]}
+
+    def entry_by_fingerprint(self, fp: str) -> dict[str, Any] | None:
+        with self._lock:
+            r = self._conn.execute(
+                "SELECT id, chat_id, sheet, fingerprint, title, analysis, "
+                "created_at, checked_at, removed FROM entries "
+                "WHERE fingerprint = ? AND removed = 0 ORDER BY created_at LIMIT 1",
+                (fp,)).fetchone()
+        return self._entry_row(r) if r else None
+
+    def active_entries(self, sheet: str) -> list[dict[str, Any]]:
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT id, chat_id, sheet, fingerprint, title, analysis, "
+                "created_at, checked_at, removed FROM entries "
+                "WHERE sheet = ? AND removed = 0", (sheet,)).fetchall()
+        return [self._entry_row(r) for r in rows]
+
+    def update_entry_analysis(self, entry_id: str, analysis: dict[str, Any],
+                              title: str) -> None:
+        with self._lock:
+            self._conn.execute(
+                "UPDATE entries SET analysis = ?, title = ?, updated_at = ? "
+                "WHERE id = ?",
+                (json.dumps(analysis), title, time.time(), entry_id))
+            self._conn.commit()
+
+    def set_entry_checked(self, entry_id: str, checked_at: float | None) -> None:
+        with self._lock:
+            self._conn.execute(
+                "UPDATE entries SET checked_at = ?, updated_at = ? WHERE id = ?",
+                (checked_at, time.time(), entry_id))
+            self._conn.commit()
+
+    def mark_entry_removed(self, entry_id: str) -> None:
+        with self._lock:
+            self._conn.execute(
+                "UPDATE entries SET removed = 1, updated_at = ? WHERE id = ?",
+                (time.time(), entry_id))
+            self._conn.commit()
+
+    def entry_stats(self, sheet: str) -> dict[str, Any]:
+        with self._lock:
+            total = self._conn.execute(
+                "SELECT COUNT(*) FROM entries WHERE sheet=? AND removed=0",
+                (sheet,)).fetchone()[0]
+            removed = self._conn.execute(
+                "SELECT COUNT(*) FROM entries WHERE sheet=? AND removed=1",
+                (sheet,)).fetchone()[0]
+            rows = self._conn.execute(
+                "SELECT created_at, checked_at FROM entries "
+                "WHERE sheet=? AND removed=0 AND checked_at IS NOT NULL",
+                (sheet,)).fetchall()
+        checked = len(rows)
+        avg_h = (sum((c - cr) for cr, c in rows) / checked / 3600) if checked else 0.0
+        return {"total": total, "removed": removed, "checked": checked,
+                "avg_check_hours": round(avg_h, 2)}
+
     # --- reminders ---------------------------------------------------
     def add_reminder(self, chat_id: int, fire_at: float, title: str,
-                     payload: dict[str, Any]) -> int:
+                     payload: dict[str, Any], entry_id: str | None = None) -> int:
         with self._lock:
             cur = self._conn.execute(
-                "INSERT INTO reminders(chat_id, fire_at, title, payload) "
-                "VALUES (?, ?, ?, ?)",
-                (chat_id, fire_at, title, json.dumps(payload)),
+                "INSERT INTO reminders(chat_id, fire_at, title, payload, entry_id) "
+                "VALUES (?, ?, ?, ?, ?)",
+                (chat_id, fire_at, title, json.dumps(payload), entry_id),
             )
             self._conn.commit()
             return int(cur.lastrowid)
+
+    def cancel_entry_reminders(self, entry_id: str) -> int:
+        with self._lock:
+            cur = self._conn.execute(
+                "UPDATE reminders SET fired = 1 WHERE entry_id = ? AND fired = 0",
+                (entry_id,))
+            self._conn.commit()
+            return cur.rowcount
 
     def due_reminders(self, now: float) -> list[dict[str, Any]]:
         with self._lock:

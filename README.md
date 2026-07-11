@@ -116,6 +116,34 @@ Runtime additions persist in the local DB and appear in `/allowlist`.
   the **last sheet row written** per sheet plus the processed count and last
   time, all shown in `/status`.
 
+## The Done checkbox, deletions & check-time stats
+
+Every row gets a **Done** checkbox plus **ID**, **Checked At** and
+**Time→Check (h)** columns. A background sync (every ~60s) reconciles the
+sheet with the bot's state:
+
+- **Tick Done** → reminders for that item stop, and the **check time** +
+  **time-to-check** are written to the row.
+- **Un-tick** ("checked out") → treated as never checked; the clock keeps
+  running from the original capture time.
+- **Delete a row** → the bot notices it's gone, cancels its reminders and
+  never reminds again (and counts it).
+- A **Stats** tab in each spreadsheet shows totals, checked, removed, and the
+  **average time-to-check**.
+
+## Re-sending updates the row (cumulative)
+
+Send the same article/event/file again and Briefer **merges any new info into
+the existing row** (unioning catch-points, tags, criteria, etc.) instead of
+just saying "already added". If nothing new is found, it says so and leaves
+the row untouched.
+
+## Files it reads
+
+PDF, **Word (.docx)**, **PowerPoint (.pptx)**, **Excel (.xlsx)**, and plain
+text/markdown/CSV/JSON — sent directly to the bot. Images/screenshots are read
+by vision; audio/video are transcribed.
+
 ## Images in the sheet
 
 Image attachments (photos, screenshots, tweet images) are uploaded to a

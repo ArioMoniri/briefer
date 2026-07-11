@@ -202,6 +202,72 @@ def test_sheet_column_and_row_helpers():
     assert _appended_row_number({"bad": 1}) is None
 
 
+def test_analysis_merge_is_cumulative():
+    from briefer.pipeline import _merge_analysis
+    prev = {"catch_points": ["a", "b"], "tags": ["x"], "summary": "old"}
+    new = {"catch_points": ["b", "c"], "tags": ["x", "y"], "summary": "new"}
+    merged, changed = _merge_analysis(prev, new)
+    assert merged["catch_points"] == ["a", "b", "c"]
+    assert merged["tags"] == ["x", "y"]
+    assert merged["summary"] == "new" and changed is True
+    _, unchanged = _merge_analysis(prev, prev)
+    assert unchanged is False
+
+
+def test_office_docx_extraction():
+    import io
+    from docx import Document
+    from briefer.enrich import office_to_text
+    d = Document()
+    d.add_paragraph("Deadline Aug 1")
+    buf = io.BytesIO()
+    d.save(buf)
+    assert "Deadline Aug 1" in office_to_text(buf.getvalue(), "x.docx")
+
+
+def test_entries_and_checkbox_sync():
+    import tempfile
+    import time as _t
+    from briefer.storage import Store
+    from briefer.sheet_sync import SheetSync
+    from briefer.sheets import EVENT_HEADERS, _control_cols
+
+    s = Store(Path(tempfile.mktemp(suffix=".db")))
+    try:
+        s.add_entry("e1", 5, "event", "fp1", "H", {"title": "H"})
+        s.add_reminder(5, _t.time() + 9999, "r", {}, entry_id="e1")
+        assert s.entry_by_fingerprint("fp1")["id"] == "e1"
+
+        c = _control_cols(EVENT_HEADERS)
+        row = [""] * len(EVENT_HEADERS)
+        row[c["id"] - 1] = "e1"
+        row[c["done"] - 1] = "TRUE"
+
+        class FakeWS:
+            def __init__(self, rows): self._rows = rows
+            def get_all_values(self): return self._rows
+
+        class FakeSheets:
+            def __init__(self, rows): self._ws = FakeWS(rows); self.check = []
+            def worksheet(self, sheet): return self._ws
+            def write_check_cells(self, sheet, r, iso, h): self.check.append((r, h))
+            def write_stats(self, sheet, st): pass
+
+        # Checked → checked_at set + reminders cancelled.
+        fake = FakeSheets([EVENT_HEADERS, row])
+        SheetSync(fake, s)._sync_sheet("event")
+        assert s.entry_by_fingerprint("fp1")["checked_at"] is not None
+        assert len(s.due_reminders(_t.time() + 99999)) == 0
+        assert fake.check  # a check cell was written
+
+        # Deleted row → entry removed + counted.
+        SheetSync(FakeSheets([EVENT_HEADERS]), s)._sync_sheet("event")
+        assert s.active_entries("event") == []
+        assert s.get_meta("event_removed_total") == "1"
+    finally:
+        s.close()
+
+
 def test_guess_media_type():
     from briefer.media import guess_media_type
     assert guess_media_type(b"\xff\xd8\xff\xe0xx") == "image/jpeg"

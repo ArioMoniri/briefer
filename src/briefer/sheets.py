@@ -134,21 +134,37 @@ def _appended_row_number(resp: Any) -> int | None:
     except Exception:  # noqa: BLE001
         return None
 
-ARTICLE_HEADERS = [
+# Control columns appended after the data + Image column. Their presence and
+# order is relied on by sheet_sync, so keep them last and in this order.
+_CONTROL = ["ID", "Done", "Checked At", "Time→Check (h)"]
+
+_ARTICLE_DATA = [
     "Captured At", "Title", "Type", "Summary", "Catch Points",
     "Vivax Relevance", "Vivax Use Cases", "Entities", "Tags", "Links",
     "Source", "Verified", "Verification Notes", "Confidence", "Submitted By",
-    "Image",
 ]
-
-EVENT_HEADERS = [
+_EVENT_DATA = [
     "Captured At", "Title", "Event Type", "Summary", "Organizer", "Location",
     "Event Date", "Application Deadline", "Deadline (raw)", "Eligibility",
     "Required Materials", "Application Steps", "Application URL", "Cost",
     "Catch Points", "Vivax Relevance", "Should Apply", "Verified",
     "Deadline Confidence", "Verification Notes", "Source", "Submitted By",
-    "Image",
 ]
+# Full header = data columns + Image + control columns.
+ARTICLE_HEADERS = _ARTICLE_DATA + ["Image"] + _CONTROL
+EVENT_HEADERS = _EVENT_DATA + ["Image"] + _CONTROL
+
+# 1-based column numbers of the control block (same offsets for both sheets,
+# counted from the end): …, Image, ID, Done, Checked At, Time→Check.
+_N_CONTROL = len(_CONTROL)  # 4
+
+
+def _control_cols(headers: list[str]) -> dict[str, int]:
+    n = len(headers)
+    return {
+        "image": n - 4, "id": n - 3, "done": n - 2,
+        "checked_at": n - 1, "time": n,
+    }
 
 
 def _fmt(value: Any) -> str:
@@ -217,77 +233,154 @@ class SheetsClient:
         ws = ss.sheet1
         existing = ws.row_values(1)
         if existing != headers:
-            if not existing:
+            if not existing or not any(existing):
                 ws.update([headers], "A1")
-            elif not any(existing):
+            elif headers[:len(existing)] == existing:
+                # Older sheet with fewer columns — extend the header row in
+                # place (we only ever append columns, never reorder).
                 ws.update([headers], "A1")
-            # If headers exist but differ, leave them; append still works by
-            # position. We log so the operator can reconcile.
-            if existing and existing != headers:
-                log.info("Sheet '%s' already has headers; appending by column order.",
+                log.info("Extended '%s' header row with new columns.", title)
+            else:
+                log.info("Sheet '%s' has custom headers; appending by column order.",
                          title)
         ws.freeze(rows=1)
         return ws
 
-    def append_article(self, a: dict[str, Any], source: str, user: str,
-                       images: list[tuple[bytes, str]] | None = None) -> int | None:
+    # --- data-row builders (base columns only, no control columns) ---
+    @staticmethod
+    def _article_data(a: dict[str, Any], source: str, user: str) -> list[str]:
         now = datetime.now(timezone.utc).astimezone().isoformat(timespec="seconds")
         issues = a.get("_verification_issues") or []
-        row = [
-            now,
-            _fmt(a.get("title")),
-            "Article",
-            _fmt(a.get("summary")),
-            _fmt(a.get("catch_points")),
-            _fmt(a.get("vivax_relevance")),
-            _fmt(a.get("vivax_use_cases")),
-            _fmt(a.get("entities")),
-            _fmt(a.get("tags")),
-            _fmt(a.get("links")),
-            _fmt(source),
+        return [
+            now, _fmt(a.get("title")), "Article", _fmt(a.get("summary")),
+            _fmt(a.get("catch_points")), _fmt(a.get("vivax_relevance")),
+            _fmt(a.get("vivax_use_cases")), _fmt(a.get("entities")),
+            _fmt(a.get("tags")), _fmt(a.get("links")), _fmt(source),
             "✅" if a.get("_verified") else "⚠️",
             _fmt([f"{i.get('field')}: {i.get('problem')}" for i in issues]),
-            _fmt(a.get("confidence")),
-            _fmt(user),
-            "",  # Image (filled separately, as a controlled formula)
+            _fmt(a.get("confidence")), _fmt(user),
         ]
-        # RAW (not USER_ENTERED): untrusted content must never be parsed as a
-        # formula (=IMPORTXML/HYPERLINK exfiltration). RAW stores it verbatim.
-        resp = self._articles.append_row(row, value_input_option="RAW")
-        rownum = _appended_row_number(resp)
-        self._save_image(self._articles, rownum, len(ARTICLE_HEADERS), images)
-        return rownum
 
-    def append_event(self, e: dict[str, Any], source: str, user: str,
-                     images: list[tuple[bytes, str]] | None = None) -> int | None:
+    @staticmethod
+    def _event_data(e: dict[str, Any], source: str, user: str) -> list[str]:
         now = datetime.now(timezone.utc).astimezone().isoformat(timespec="seconds")
         issues = e.get("_verification_issues") or []
-        row = [
-            now,
-            _fmt(e.get("title")),
-            _fmt(e.get("event_type")),
-            _fmt(e.get("summary")),
-            _fmt(e.get("organizer")),
-            _fmt(e.get("location")),
-            _fmt(e.get("event_date")),
-            _fmt(e.get("application_deadline")),
-            _fmt(e.get("deadline_raw")),
-            _fmt(e.get("eligibility")),
-            _fmt(e.get("required_materials")),
-            _fmt(e.get("application_steps")),
-            _fmt(e.get("application_url")),
-            _fmt(e.get("cost")),
-            _fmt(e.get("catch_points")),
-            _fmt(e.get("vivax_relevance")),
-            _fmt(e.get("should_apply")),
+        return [
+            now, _fmt(e.get("title")), _fmt(e.get("event_type")),
+            _fmt(e.get("summary")), _fmt(e.get("organizer")),
+            _fmt(e.get("location")), _fmt(e.get("event_date")),
+            _fmt(e.get("application_deadline")), _fmt(e.get("deadline_raw")),
+            _fmt(e.get("eligibility")), _fmt(e.get("required_materials")),
+            _fmt(e.get("application_steps")), _fmt(e.get("application_url")),
+            _fmt(e.get("cost")), _fmt(e.get("catch_points")),
+            _fmt(e.get("vivax_relevance")), _fmt(e.get("should_apply")),
             "✅" if e.get("_verified") else "⚠️",
             _fmt(e.get("_deadline_confidence")),
             _fmt([f"{i.get('field')}: {i.get('problem')}" for i in issues]),
-            _fmt(source),
-            _fmt(user),
-            "",  # Image
+            _fmt(source), _fmt(user),
         ]
-        resp = self._events.append_row(row, value_input_option="RAW")
+
+    def worksheet(self, sheet: str) -> gspread.Worksheet:
+        return self._events if sheet == "event" else self._articles
+
+    def _append(self, sheet: str, data: list[str], entry_id: str,
+                images: list[tuple[bytes, str]] | None) -> int | None:
+        ws = self.worksheet(sheet)
+        headers = EVENT_HEADERS if sheet == "event" else ARTICLE_HEADERS
+        cols = _control_cols(headers)
+        # data + Image("") + ID + Done(FALSE) + Checked At("") + Time("")
+        row = data + ["", entry_id, "FALSE", "", ""]
+        # RAW: untrusted content is never parsed as a formula.
+        resp = ws.append_row(row, value_input_option="RAW")
         rownum = _appended_row_number(resp)
-        self._save_image(self._events, rownum, len(EVENT_HEADERS), images)
+        self._save_image(ws, rownum, cols["image"], images)
+        if rownum:
+            self._make_checkbox(ws, rownum, cols["done"])
         return rownum
+
+    def append_article(self, a, source, user, images=None, entry_id="") -> int | None:
+        return self._append("article", self._article_data(a, source, user),
+                            entry_id, images)
+
+    def append_event(self, e, source, user, images=None, entry_id="") -> int | None:
+        return self._append("event", self._event_data(e, source, user),
+                            entry_id, images)
+
+    def _make_checkbox(self, ws: gspread.Worksheet, row: int, col: int) -> None:
+        try:
+            ws.spreadsheet.batch_update({"requests": [{
+                "setDataValidation": {
+                    "range": {"sheetId": ws.id,
+                              "startRowIndex": row - 1, "endRowIndex": row,
+                              "startColumnIndex": col - 1, "endColumnIndex": col},
+                    "rule": {"condition": {"type": "BOOLEAN"},
+                             "showCustomUi": True, "strict": False},
+                }}]})
+        except Exception as exc:  # noqa: BLE001
+            log.warning("could not set checkbox: %s", exc)
+
+    # --- cumulative update -------------------------------------------
+    def find_row_by_id(self, sheet: str, entry_id: str) -> int | None:
+        ws = self.worksheet(sheet)
+        headers = EVENT_HEADERS if sheet == "event" else ARTICLE_HEADERS
+        col = _control_cols(headers)["id"]
+        try:
+            ids = ws.col_values(col)
+        except Exception as exc:  # noqa: BLE001
+            log.warning("find_row_by_id read failed: %s", exc)
+            return None
+        for i, val in enumerate(ids[1:], start=2):  # skip header
+            if val == entry_id:
+                return i
+        return None
+
+    def update_data_row(self, sheet: str, rownum: int, merged: dict[str, Any],
+                        source: str, user: str,
+                        images: list[tuple[bytes, str]] | None = None) -> None:
+        """Rewrite only the DATA columns of an existing row (cumulative merge).
+        Control columns (ID/Done/Checked At/Time) are left untouched."""
+        ws = self.worksheet(sheet)
+        if sheet == "event":
+            data = self._event_data(merged, source, user)
+        else:
+            data = self._article_data(merged, source, user)
+        last = _col_letter(len(data))
+        try:
+            ws.update([data], f"A{rownum}:{last}{rownum}", value_input_option="RAW")
+        except Exception as exc:  # noqa: BLE001
+            log.warning("update_data_row failed: %s", exc)
+        headers = EVENT_HEADERS if sheet == "event" else ARTICLE_HEADERS
+        if images:
+            self._save_image(ws, rownum, _control_cols(headers)["image"], images)
+
+    def write_stats(self, sheet: str, stats: dict[str, Any]) -> None:
+        """Maintain a 'Stats' tab (per spreadsheet) with counts + averages."""
+        ss = self.worksheet(sheet).spreadsheet
+        try:
+            try:
+                st = ss.worksheet("Stats")
+            except gspread.WorksheetNotFound:
+                st = ss.add_worksheet(title="Stats", rows=20, cols=3)
+            when = datetime.now(timezone.utc).astimezone().isoformat(timespec="seconds")
+            rows = [
+                ["Metric", "Value"],
+                ["Total entries", stats.get("total", 0)],
+                ["Checked (done)", stats.get("checked", 0)],
+                ["Removed from sheet", stats.get("removed", 0)],
+                ["Avg time to check (hours)", stats.get("avg_check_hours", 0)],
+                ["Updated at", when],
+            ]
+            st.update(rows, "A1", value_input_option="RAW")
+        except Exception as exc:  # noqa: BLE001
+            log.warning("write_stats failed: %s", exc)
+
+    def write_check_cells(self, sheet: str, rownum: int,
+                          checked_at_iso: str, hours: Any) -> None:
+        ws = self.worksheet(sheet)
+        headers = EVENT_HEADERS if sheet == "event" else ARTICLE_HEADERS
+        cols = _control_cols(headers)
+        rng = f"{_col_letter(cols['checked_at'])}{rownum}:{_col_letter(cols['time'])}{rownum}"
+        try:
+            ws.update([[checked_at_iso, hours]], rng, value_input_option="RAW")
+        except Exception as exc:  # noqa: BLE001
+            log.warning("write_check_cells failed: %s", exc)

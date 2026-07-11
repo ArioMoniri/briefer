@@ -11,6 +11,7 @@ from __future__ import annotations
 import hashlib
 import logging
 import time
+import uuid
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Optional
@@ -35,6 +36,9 @@ class Result:
     event_dt: Optional[datetime] = None
     event_all_day: bool = False
     sheet_row: Optional[int] = None
+    entry_id: Optional[str] = None
+    updated: bool = False          # re-submission that updated an existing row
+    changed: bool = False          # …and it actually added new info
 
 
 class Pipeline:
@@ -53,39 +57,95 @@ class Pipeline:
         return hashlib.sha256(basis.encode()).hexdigest()
 
     def process(self, text: str, attachments: list[Attachment],
-                submitted_by: str, force_kind: str | None = None) -> Result:
+                submitted_by: str, force_kind: str | None = None,
+                chat_id: int = 0) -> Result:
         content = self.enricher.enrich(text, attachments)
         fp = self._fingerprint(content)
-        if self.store.seen(fp):
-            log.info("Duplicate submission (fp=%s)", fp[:12])
-            return Result(kind="article", analysis={}, source=_source_label(content),
-                          duplicate=True)
+        existing = self.store.entry_by_fingerprint(fp)
 
-        kind = force_kind or analysis.classify(self.llm, content)
-        log.info("Classified as %s", kind)
+        # Re-submission: keep the item on its original sheet.
+        kind = force_kind or (existing["sheet"] if existing
+                              else analysis.classify(self.llm, content))
+        log.info("Classified as %s%s", kind, " (re-submission)" if existing else "")
 
         if kind == "event":
             raw = analysis.analyze_event(self.llm, self.cfg, content)
         else:
             raw = analysis.analyze_article(self.llm, self.cfg, content)
-
         verification = analysis.verify(self.llm, content, raw, kind)
-        merged = analysis.apply_corrections(raw, verification)
+        fresh = analysis.apply_corrections(raw, verification)
 
         source = _source_label(content)
         images = _collect_images(content)
+
+        if existing:
+            # Cumulatively merge new info into the SAME row instead of skipping.
+            merged, changed = _merge_analysis(existing["analysis"], fresh)
+            row = self.sheets.find_row_by_id(existing["sheet"], existing["id"])
+            if row and changed:
+                self.sheets.update_data_row(existing["sheet"], row, merged,
+                                            source, submitted_by, images)
+            self.store.update_entry_analysis(existing["id"], merged,
+                                             str(merged.get("title", "")))
+            dl = _parse_deadline(merged.get("application_deadline"))
+            ev, all_day = _parse_event_date(merged.get("event_date"))
+            return Result(kind=existing["sheet"], analysis=merged, source=source,
+                          deadline_dt=dl, event_dt=ev, event_all_day=all_day,
+                          sheet_row=row, entry_id=existing["id"],
+                          updated=True, changed=changed)
+
+        entry_id = uuid.uuid4().hex[:12]
         if kind == "event":
-            row = self.sheets.append_event(merged, source, submitted_by, images)
+            row = self.sheets.append_event(fresh, source, submitted_by, images, entry_id)
         else:
-            row = self.sheets.append_article(merged, source, submitted_by, images)
+            row = self.sheets.append_article(fresh, source, submitted_by, images, entry_id)
+        self.store.add_entry(entry_id, chat_id, kind, fp,
+                             str(fresh.get("title", "")), fresh)
 
-        self.store.mark_seen(fp, kind)
-
-        deadline_dt = _parse_deadline(merged.get("application_deadline"))
-        event_dt, all_day = _parse_event_date(merged.get("event_date"))
-        return Result(kind=kind, analysis=merged, source=source,
+        deadline_dt = _parse_deadline(fresh.get("application_deadline"))
+        event_dt, all_day = _parse_event_date(fresh.get("event_date"))
+        return Result(kind=kind, analysis=fresh, source=source,
                       deadline_dt=deadline_dt, event_dt=event_dt,
-                      event_all_day=all_day, sheet_row=row)
+                      event_all_day=all_day, sheet_row=row, entry_id=entry_id)
+
+
+_LIST_FIELDS = {
+    "catch_points", "vivax_use_cases", "entities", "tags", "links",
+    "eligibility", "required_materials", "application_steps",
+}
+
+
+def _merge_analysis(prev: dict[str, Any], new: dict[str, Any]
+                    ) -> tuple[dict[str, Any], bool]:
+    """Cumulatively merge a fresh analysis into a previous one.
+
+    List fields are unioned (nothing is lost); scalar fields take the newest
+    non-empty value. Returns (merged, changed) where `changed` is True if any
+    new information was actually added.
+    """
+    merged = dict(new)
+    changed = False
+    for k in _LIST_FIELDS:
+        old = prev.get(k) or []
+        neu = new.get(k) or []
+        old = [old] if isinstance(old, str) else list(old)
+        neu = [neu] if isinstance(neu, str) else list(neu)
+        seen: set[str] = set()
+        union: list[Any] = []
+        for item in old + neu:
+            key = str(item).strip().lower()
+            if key and key not in seen:
+                seen.add(key)
+                union.append(item)
+        if len(union) > len(old):
+            changed = True
+        merged[k] = union
+    for k, v in new.items():
+        if k in _LIST_FIELDS or k.startswith("_"):
+            continue
+        if v not in (None, "") and str(prev.get(k, "")) != str(v):
+            changed = True
+    return merged, changed
 
 
 def _collect_images(content: EnrichedContent, limit: int = 3

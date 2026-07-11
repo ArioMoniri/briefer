@@ -375,3 +375,51 @@ def make_media_attachment(data: bytes, media_type: str, filename: str) -> Attach
     """Audio/video to be transcribed during enrichment."""
     return Attachment(kind="media", media_type=media_type, raw=data,
                       filename=filename or "media")
+
+
+def make_office_attachment(data: bytes, filename: str, media_type: str) -> Attachment:
+    return Attachment(kind="file", media_type=media_type,
+                      text=office_to_text(data, filename), filename=filename)
+
+
+def office_to_text(data: bytes, name: str) -> str:
+    """Extract text from Word/PowerPoint/Excel files (lazy imports)."""
+    n = name.lower()
+    try:
+        if n.endswith(".docx"):
+            from docx import Document
+            doc = Document(io.BytesIO(data))
+            parts = [p.text for p in doc.paragraphs]
+            for table in doc.tables:
+                for row in table.rows:
+                    parts.append(" | ".join(c.text for c in row.cells))
+            return "\n".join(p for p in parts if p.strip())
+        if n.endswith(".pptx"):
+            from pptx import Presentation
+            prs = Presentation(io.BytesIO(data))
+            parts: list[str] = []
+            for i, slide in enumerate(prs.slides, 1):
+                parts.append(f"# Slide {i}")
+                for shape in slide.shapes:
+                    if shape.has_text_frame:
+                        for para in shape.text_frame.paragraphs:
+                            t = "".join(r.text for r in para.runs)
+                            if t.strip():
+                                parts.append(t)
+            return "\n".join(parts)
+        if n.endswith((".xlsx", ".xlsm")):
+            from openpyxl import load_workbook
+            wb = load_workbook(io.BytesIO(data), read_only=True, data_only=True)
+            parts = []
+            for ws in wb.worksheets:
+                parts.append(f"# {ws.title}")
+                for row in ws.iter_rows(values_only=True):
+                    cells = [str(c) for c in row if c is not None]
+                    if cells:
+                        parts.append(" | ".join(cells))
+            return "\n".join(parts)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("office parse failed for %s: %s", name, exc)
+        return f"(could not extract text from {name})"
+    return (f"(unsupported file type '{name}' — send .pdf, .docx, .pptx, "
+            ".xlsx, or a text file)")

@@ -23,7 +23,8 @@ from . import menus
 from .calendar_ics import build_event_ics
 from .config import Config
 from .enrich import (Attachment, make_image_attachment, make_pdf_attachment,
-                     make_text_attachment, make_media_attachment)
+                     make_text_attachment, make_media_attachment,
+                     make_office_attachment)
 from .pipeline import Pipeline, Result
 from .security import RateLimiter, verify_password, hash_password
 from .storage import Store
@@ -399,11 +400,15 @@ class BrieferBot:
                 raise _TooLarge("That file is too large.")
             mime = doc.mime_type or ""
             name = doc.file_name or "file"
-            if mime == "application/pdf" or name.lower().endswith(".pdf"):
+            low = name.lower()
+            if mime == "application/pdf" or low.endswith(".pdf"):
                 out.append({"t": "pdf", "file_id": doc.file_id, "mime": mime, "name": name})
             elif mime.startswith("image/"):
                 out.append({"t": "image", "file_id": doc.file_id, "mime": mime, "name": name})
-            elif mime.startswith("text/") or name.lower().endswith(
+            elif low.endswith((".docx", ".pptx", ".xlsx", ".xlsm")):
+                out.append({"t": "office", "file_id": doc.file_id,
+                            "mime": mime, "name": name})
+            elif mime.startswith("text/") or low.endswith(
                 (".txt", ".md", ".csv", ".json", ".log")
             ):
                 out.append({"t": "text", "file_id": doc.file_id,
@@ -442,6 +447,9 @@ class BrieferBot:
             elif t == "text":
                 out.append(make_text_attachment(data, d.get("name", "file"),
                                                 d.get("mime", "text/plain")))
+            elif t == "office":
+                out.append(make_office_attachment(
+                    data, d.get("name", "file"), d.get("mime", "")))
             elif t == "media":
                 out.append(make_media_attachment(
                     data, d.get("mime", "application/octet-stream"),
@@ -511,7 +519,7 @@ class BrieferBot:
             attachments = await self._materialize(bot, job["attachments"])
             result: Result = await asyncio.to_thread(
                 self.pipeline.process, job["text"], attachments,
-                job["submitter"], job["force_kind"])
+                job["submitter"], job["force_kind"], chat_id)
         except Exception as exc:  # noqa: BLE001
             log.exception("pipeline failure (job %s)", job["id"])
             reason = f"{type(exc).__name__}: {exc}"
@@ -522,12 +530,14 @@ class BrieferBot:
                        parse_mode=ParseMode.HTML)
             return
 
-        if result.duplicate:
+        if result.updated and not result.changed:
             self.store.finish_job(job["id"], "done")
-            await edit("♻️ Already processed this one — skipping the sheet.")
+            await edit("♻️ Re-checked — no new info to add; the existing row is "
+                       "already up to date.")
             return
 
-        await edit(_format_catch(result), parse_mode=ParseMode.HTML,
+        prefix = "🔄 <b>Updated existing entry with new info</b>\n\n" if result.updated else ""
+        await edit(prefix + _format_catch(result), parse_mode=ParseMode.HTML,
                    disable_web_page_preview=True)
         # Checkpoint so /status shows progress and resets know where we are.
         self.store.set_meta("last_processed_at", int(time.time()))
@@ -536,7 +546,8 @@ class BrieferBot:
             self.store.set_meta(f"{result.kind}_last_row", result.sheet_row)
         self.store.finish_job(job["id"], "done")
 
-        if result.kind == "event":
+        # Schedule reminders only for brand-new events (updates keep theirs).
+        if result.kind == "event" and not result.updated:
             if result.deadline_dt:
                 self._schedule_deadline(chat_id, result)
             await self._send_calendar(bot, chat_id, result)
@@ -621,6 +632,7 @@ class BrieferBot:
                  "deadline": dt.isoformat(),
                  "application_url": result.analysis.get("application_url"),
                  "required": result.analysis.get("required_materials", [])},
+                entry_id=result.entry_id,
             )
             scheduled += 1
         if scheduled:
@@ -858,4 +870,8 @@ def build_application(cfg: Config, bot: BrieferBot) -> Application:
 
     if app.job_queue:
         app.job_queue.run_repeating(bot.reminder_tick, interval=60, first=10)
+        # Sync the sheets (checkboxes, deletions, time-to-check stats).
+        from .sheet_sync import SheetSync
+        sync = SheetSync(bot.pipeline.sheets, bot.store)
+        app.job_queue.run_repeating(sync.tick, interval=60, first=25)
     return app
