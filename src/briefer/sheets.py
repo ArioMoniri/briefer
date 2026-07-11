@@ -458,6 +458,17 @@ class SheetsClient:
             except Exception as exc:  # noqa: BLE001
                 log.warning("assignee dropdown (%s) failed: %s", sheet, exc)
 
+    def entry_id_at_row(self, sheet: str, rownum: int) -> str | None:
+        """Read the ID cell at a row — used to resolve a reply to an older
+        result message (which only tells us the row number)."""
+        ws = self.worksheet(sheet)
+        headers = EVENT_HEADERS if sheet == "event" else ARTICLE_HEADERS
+        col = _control_cols(headers)["id"]
+        try:
+            return (ws.cell(rownum, col).value or "").strip() or None
+        except Exception:  # noqa: BLE001
+            return None
+
     def write_assignee_name(self, sheet: str, rownum: int, name: str) -> None:
         """Write a name into the Assignee cell (e.g. when assigned via reply)."""
         ws = self.worksheet(sheet)

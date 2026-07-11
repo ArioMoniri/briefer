@@ -560,6 +560,11 @@ class BrieferBot:
         chat_id = update.effective_chat.id
         mapping = self.store.get_row_message(chat_id, msg.reply_to_message.message_id)
         if not mapping or not mapping.get("entry_id"):
+            # Fallback: resolve from the replied message body ("(event…" / row N)
+            # so it works for results posted before the mapping existed.
+            rt = msg.reply_to_message
+            mapping = self._entry_from_message_text(rt.text or rt.caption or "")
+        if not mapping or not mapping.get("entry_id"):
             return False
         eid, sheet = mapping["entry_id"], mapping.get("sheet") or "article"
         entry = self.store.get_entry(eid)
@@ -599,6 +604,23 @@ class BrieferBot:
             await self._assign_entry(update, eid, sheet, name, title)
             return True
         return False
+
+    def _entry_from_message_text(self, body: str) -> dict | None:
+        """Recover (entry_id, sheet) from a result message that shows its kind
+        and '(row N)', by reading the ID cell at that row."""
+        if not body:
+            return None
+        import re
+        sheet = "event" if re.search(r"\(event\b", body, re.I) else "article"
+        m = re.search(r"\(row\s*(\d+)\)|\brow\s+(\d+)\b", body, re.I)
+        if not m:
+            return None
+        row = int(m.group(1) or m.group(2))
+        try:
+            eid = self.pipeline.sheets.entry_id_at_row(sheet, row)
+        except Exception:  # noqa: BLE001
+            eid = None
+        return {"entry_id": eid, "sheet": sheet} if eid else None
 
     async def _assign_entry(self, update: Update, eid: str, sheet: str,
                             name: str, title: str) -> None:
