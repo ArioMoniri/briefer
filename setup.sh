@@ -183,6 +183,7 @@ MEDIA_MAX_BYTES=50000000
 VIDEO_KEYFRAMES=${KF}
 ENABLE_GALLERY_DL=${GAL}
 ENABLE_BROWSER_FALLBACK=1
+COOKIES_FILE=cookies.txt
 COMPANY_NAME=Vivax
 COMPANY_URL=https://getvivax.com
 COMPANY_FOCUS=Medical AI, medical education, clinical simulation, and operating-room intelligence ("Reality Motors").

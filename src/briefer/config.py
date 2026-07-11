@@ -93,6 +93,7 @@ class Config:
     video_keyframes: int
     enable_gallery_dl: bool
     enable_browser_fallback: bool
+    cookies_file: str
 
     # Behaviour
     max_download_bytes: int
@@ -166,6 +167,14 @@ class Config:
     def token_path(self) -> Path:
         return self._resolve(self.token_file)
 
+    @property
+    def cookies_path(self) -> str:
+        """Absolute path to cookies.txt if it exists, else empty string."""
+        if not self.cookies_file:
+            return ""
+        p = self._resolve(self.cookies_file)
+        return str(p) if p.exists() else ""
+
 
 def load_config() -> Config:
     cfg = Config(
@@ -196,6 +205,9 @@ def load_config() -> Config:
         # On by default but a no-op until Playwright + a browser are installed
         # (./manage.sh enable-browser).
         enable_browser_fallback=_get_bool("ENABLE_BROWSER_FALLBACK", True),
+        # Netscape cookies.txt shared by the browser / yt-dlp / gallery-dl so
+        # logged-in content (LinkedIn, Instagram, private X…) is accessible.
+        cookies_file=_get("COOKIES_FILE", "cookies.txt"),
         company_name=_get("COMPANY_NAME", "Vivax"),
         company_url=_get("COMPANY_URL", "https://getvivax.com"),
         company_focus=_get(

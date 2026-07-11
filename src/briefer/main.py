@@ -58,22 +58,44 @@ def main() -> int:
     llm = LLM(cfg.anthropic_api_key, cfg.model, cfg.verify_model)
     tweets = TweetExtractor(cfg.twitter_bearer_token, cfg.twitter_consumer_key,
                             cfg.twitter_consumer_secret)
+    cookies = cfg.cookies_path
+    if cookies:
+        log.info("Using cookies file for authenticated fetches: %s", cookies)
     transcriber = VideoTranscriber(
         cfg.enable_transcription, cfg.whisper_model,
         cfg.transcription_max_seconds, cfg.media_max_bytes,
-        keyframes=cfg.video_keyframes)
+        keyframes=cfg.video_keyframes, cookies_file=cookies)
     enricher = Enricher(cfg.max_download_bytes, tweet_extractor=tweets,
                         transcriber=transcriber,
                         enable_gallery_dl=cfg.enable_gallery_dl,
-                        enable_browser=cfg.enable_browser_fallback)
+                        enable_browser=cfg.enable_browser_fallback,
+                        cookies_file=cookies)
+    # Reuse previously auto-created sheets so restarts don't spawn new empty
+    # ones (and lose your data). Env IDs always win; otherwise fall back to the
+    # ids we saved last time.
+    import json
+    ids_path = cfg.data_dir / "sheet_ids.json"
+    saved: dict[str, str] = {}
+    if ids_path.exists():
+        try:
+            saved = json.loads(ids_path.read_text())
+        except Exception:  # noqa: BLE001
+            saved = {}
+    articles_id = cfg.articles_sheet_id or saved.get("articles", "")
+    events_id = cfg.events_sheet_id or saved.get("events", "")
     try:
         sheets = SheetsClient(
             cfg.google_auth_mode, str(cfg.service_account_path),
-            str(cfg.token_path), cfg.articles_sheet_id, cfg.events_sheet_id
+            str(cfg.token_path), articles_id, events_id
         )
     except Exception as exc:  # noqa: BLE001
         log.error("Could not initialise Google Sheets: %s", exc)
         return 3
+    try:
+        ids_path.write_text(json.dumps(
+            {"articles": sheets.articles_id, "events": sheets.events_id}))
+    except Exception:  # noqa: BLE001
+        pass
 
     pipeline = Pipeline(cfg, llm, enricher, sheets, store)
     bot = BrieferBot(cfg, pipeline, store)

@@ -80,20 +80,23 @@ class EnrichedContent:
 class Enricher:
     def __init__(self, max_bytes: int, tweet_extractor=None,
                  transcriber=None, enable_gallery_dl: bool = True,
-                 gallery_max_images: int = 6, enable_browser: bool = False) -> None:
+                 gallery_max_images: int = 6, enable_browser: bool = False,
+                 cookies_file: str = "") -> None:
         self.max_bytes = max_bytes
         self.tweets = tweet_extractor
         self.transcriber = transcriber
         self.enable_gallery_dl = enable_gallery_dl
         self.gallery_max_images = gallery_max_images
         self.enable_browser = enable_browser
+        self.cookies_file = cookies_file
 
     def _try_gallery(self, url: str, content: EnrichedContent) -> int:
         """Fallback downloader for image posts → vision. Returns #images."""
         if not self.enable_gallery_dl:
             return 0
         from .media import gallery_images, guess_media_type
-        imgs = gallery_images(url, self.gallery_max_images, self.max_bytes)
+        imgs = gallery_images(url, self.gallery_max_images, self.max_bytes,
+                              cookies_file=self.cookies_file)
         for data in imgs:
             content.attachments.append(
                 make_image_attachment(data, guess_media_type(data), "post_image"))
@@ -153,11 +156,22 @@ class Enricher:
 
     def _extract_html_text(self, html: str) -> str:
         soup = BeautifulSoup(html, "html.parser")
+        # Grab social/meta tags first — for login-walled pages (LinkedIn), the
+        # og:title/og:description often carry the post excerpt even when the
+        # body is empty.
+        meta_bits: list[str] = []
+        for prop in ("og:title", "og:description", "twitter:title",
+                     "twitter:description", "description"):
+            tag = (soup.find("meta", property=prop)
+                   or soup.find("meta", attrs={"name": prop}))
+            if tag and tag.get("content"):
+                meta_bits.append(tag["content"].strip())
         for tag in soup(["script", "style", "noscript", "nav", "footer", "svg"]):
             tag.decompose()
         title = soup.title.string.strip() if soup.title and soup.title.string else ""
         text = " ".join(soup.get_text(" ").split())
-        return (f"{title}\n\n{text}").strip()
+        meta = "\n".join(dict.fromkeys(meta_bits))  # dedup, keep order
+        return (f"{title}\n{meta}\n\n{text}").strip()
 
     def _github(self, owner: str, repo: str) -> dict[str, Any] | None:
         repo = repo.removesuffix(".git")
@@ -230,6 +244,9 @@ class Enricher:
                 content.link_texts[url] = (
                     f"Image post ({n} image(s) downloaded and analysed via vision).")
                 return True
+            # Nothing extractable here — return False so the caller falls back
+            # to the normal HTML fetch + headless-browser render for this URL.
+            return False
         block = f"Title: {res.get('title','')}\nUploader: {res.get('uploader','')}\n"
         if res.get("description"):
             block += "Description/caption:\n" + res["description"] + "\n"
@@ -324,7 +341,7 @@ class Enricher:
             return ""
         try:
             from .browser import fetch_rendered
-            return fetch_rendered(url)
+            return fetch_rendered(url, cookies_file=self.cookies_file)
         except Exception as exc:  # noqa: BLE001
             log.warning("browser fallback error for %s: %s", url, exc)
             return ""

@@ -162,6 +162,16 @@ Install a headless browser and Briefer will render those pages:
 It activates automatically only when the normal fetch comes back thin, and
 is a no-op (graceful) if not installed. Toggle with `ENABLE_BROWSER_FALLBACK`.
 
+### Logged-in content (LinkedIn, Instagram, private X)
+
+These platforms show nothing to a logged-out visitor and have no public API —
+the only way in is to fetch **as you**. Export a `cookies.txt` from your
+logged-in browser and point `COOKIES_FILE` at it; the browser, `yt-dlp` and
+`gallery-dl` all use it. Full guide: [`docs/COOKIES.md`](docs/COOKIES.md).
+`cookies.txt` is a secret and is git-ignored. Without cookies, Briefer still
+pulls the page's og:description snippet, and a **screenshot** works for any
+platform.
+
 ## Video & tweet parsing
 
 - **Tweets / X posts**: send a status link and Briefer extracts the post text,

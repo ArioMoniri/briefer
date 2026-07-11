@@ -268,6 +268,34 @@ def test_entries_and_checkbox_sync():
         s.close()
 
 
+def test_netscape_cookie_parser():
+    import tempfile
+    import os
+    from briefer.browser import _load_netscape_cookies
+    p = tempfile.mktemp()
+    with open(p, "w") as fh:
+        fh.write("# Netscape HTTP Cookie File\n")
+        fh.write(".linkedin.com\tTRUE\t/\tTRUE\t9999999999\tli_at\tSECRET\n")
+        fh.write("#HttpOnly_.x.com\tTRUE\t/\tTRUE\t0\tauth\tabc\n")
+    try:
+        cookies = _load_netscape_cookies(p)
+    finally:
+        os.remove(p)
+    names = {c["name"]: c for c in cookies}
+    assert names["li_at"]["domain"] == ".linkedin.com"
+    assert names["li_at"]["expires"] == 9999999999
+    assert "auth" in names  # #HttpOnly_ line is parsed
+
+
+def test_og_meta_extraction():
+    from briefer.enrich import Enricher
+    e = Enricher(1000)
+    html = ('<html><head><title>T</title>'
+            '<meta property="og:description" content="The real post text here">'
+            '</head><body>Sign in</body></html>')
+    assert "The real post text here" in e._extract_html_text(html)
+
+
 def test_guess_media_type():
     from briefer.media import guess_media_type
     assert guess_media_type(b"\xff\xd8\xff\xe0xx") == "image/jpeg"

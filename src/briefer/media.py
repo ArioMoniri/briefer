@@ -325,12 +325,13 @@ class VideoTranscriber:
     """
 
     def __init__(self, enabled: bool, model: str, max_seconds: int,
-                 max_bytes: int, keyframes: int = 4) -> None:
+                 max_bytes: int, keyframes: int = 4, cookies_file: str = "") -> None:
         self.enabled = enabled
         self.model = model
         self.max_seconds = max_seconds
         self.max_bytes = max_bytes
         self.keyframes = max(0, keyframes)
+        self.cookies_file = cookies_file
 
     def _transcribe_path(self, path: str) -> str:
         model = _get_whisper(self.model)
@@ -401,6 +402,8 @@ class VideoTranscriber:
             ff = _ffmpeg_exe()
             if ff:
                 opts["ffmpeg_location"] = ff
+            if self.cookies_file:
+                opts["cookiefile"] = self.cookies_file
             with yt_dlp.YoutubeDL(opts) as ydl:
                 info = ydl.extract_info(url, download=need_media)
             out["title"] = info.get("title", "") or out["title"]
@@ -462,7 +465,8 @@ def _extract_keyframes(path: str, n: int, duration: float | None) -> list[bytes]
     return frames
 
 
-def gallery_images(url: str, max_n: int, max_bytes: int) -> list[bytes]:
+def gallery_images(url: str, max_n: int, max_bytes: int,
+                   cookies_file: str = "") -> list[bytes]:
     """Download images from a social post via gallery-dl (Instagram photos,
     Pinterest, image galleries…) so the vision model can read them.
 
@@ -484,7 +488,10 @@ def gallery_images(url: str, max_n: int, max_bytes: int) -> list[bytes]:
     images: list[bytes] = []
     with tempfile.TemporaryDirectory() as tmp:
         cmd = [sys.executable, "-m", "gallery_dl", "--quiet",
-               "--range", f"1-{max(1, max_n)}", "-D", tmp, url]
+               "--range", f"1-{max(1, max_n)}", "-D", tmp]
+        if cookies_file:
+            cmd += ["--cookies", cookies_file]
+        cmd.append(url)
         try:
             subprocess.run(cmd, capture_output=True, timeout=90, check=False)
         except Exception as exc:  # noqa: BLE001
