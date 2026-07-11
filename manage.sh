@@ -103,11 +103,26 @@ update() {
 
 google_auth() { PYTHONPATH="$APPDIR/src" "$PY" "$APPDIR/authorize_google.py"; }
 
+# Install the optional headless-browser fallback (Playwright + Chromium).
+enable_browser() {
+  echo "Installing Playwright + Chromium into the venv (adds a browser download)…"
+  "$PIP" install playwright==1.48.0
+  if [ "$(id -u)" -eq 0 ]; then
+    "$APPDIR/.venv/bin/playwright" install --with-deps chromium
+  else
+    "$APPDIR/.venv/bin/playwright" install chromium \
+      || echo "If Chromium fails to launch, run as root: sudo ./manage.sh enable-browser"
+  fi
+  echo "Browser fallback ready. It activates automatically for pages that don't"
+  echo "return text to a plain fetch. Restart:  ./manage.sh restart"
+}
+
 cmd="${1:-status}"
 case "$cmd" in
   start) start ;; stop) stop ;; restart) restart ;;
   refresh) refresh ;; reset) reset ;; status) status ;;
   logs) logs ;; errors) errors ;; attach) attach ;; foreground|fg) foreground ;; update) update ;;
   google-auth|gauth) google_auth ;;
-  *) echo "usage: $0 {start|stop|restart|refresh|reset|status|logs|errors|attach|foreground|update|google-auth}"; exit 1 ;;
+  enable-browser) enable_browser ;;
+  *) echo "usage: $0 {start|stop|restart|refresh|reset|status|logs|errors|attach|foreground|update|google-auth|enable-browser}"; exit 1 ;;
 esac

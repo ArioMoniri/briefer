@@ -10,6 +10,7 @@ import json
 import logging
 from datetime import datetime, timezone
 from typing import Any
+from urllib.parse import quote
 
 import gspread
 from google.oauth2.service_account import Credentials as SACredentials
@@ -41,15 +42,103 @@ def build_gspread_client(auth_mode: str, service_account_file: str,
             creds.refresh(Request())
             with open(token_file, "w", encoding="utf-8") as fh:
                 fh.write(creds.to_json())
-        return gspread.authorize(creds)
+        return gspread.authorize(creds), creds
     creds = SACredentials.from_service_account_file(
         service_account_file, scopes=_SCOPES)
-    return gspread.authorize(creds)
+    return gspread.authorize(creds), creds
+
+
+class DriveUploader:
+    """Uploads image bytes to a 'Briefer Images' Drive folder (drive.file
+    scope) and returns a public view URL usable in an =IMAGE() cell.
+
+    Best-effort: any failure returns None so a row still gets written.
+    """
+
+    _FOLDER = "Briefer Images"
+
+    def __init__(self, creds) -> None:
+        from google.auth.transport.requests import AuthorizedSession
+
+        self._session = AuthorizedSession(creds)
+        self._folder_id: str | None = None
+
+    def _ensure_folder(self) -> str | None:
+        if self._folder_id:
+            return self._folder_id
+        try:
+            q = (f"mimeType='application/vnd.google-apps.folder' and "
+                 f"name='{self._FOLDER}' and trashed=false")
+            r = self._session.get(
+                "https://www.googleapis.com/drive/v3/files"
+                f"?q={quote(q)}&fields=files(id)&pageSize=1", timeout=20)
+            files = r.json().get("files", []) if r.ok else []
+            if files:
+                self._folder_id = files[0]["id"]
+            else:
+                r = self._session.post(
+                    "https://www.googleapis.com/drive/v3/files?fields=id",
+                    json={"name": self._FOLDER,
+                          "mimeType": "application/vnd.google-apps.folder"},
+                    timeout=20)
+                self._folder_id = r.json().get("id") if r.ok else None
+        except Exception as exc:  # noqa: BLE001
+            log.warning("Drive folder ensure failed: %s", exc)
+            self._folder_id = None
+        return self._folder_id
+
+    def upload_image(self, data: bytes, mime: str, name: str) -> str | None:
+        try:
+            folder = self._ensure_folder()
+            r = self._session.post(
+                "https://www.googleapis.com/upload/drive/v3/files"
+                "?uploadType=media&fields=id",
+                headers={"Content-Type": mime or "image/jpeg"},
+                data=data, timeout=60)
+            if not r.ok:
+                log.warning("Drive upload failed: %s", r.text[:200])
+                return None
+            file_id = r.json().get("id")
+            if not file_id:
+                return None
+            meta = {"name": name}
+            url = f"https://www.googleapis.com/drive/v3/files/{file_id}?fields=id"
+            if folder:
+                url += f"&addParents={folder}"
+            self._session.patch(url, json=meta, timeout=20)
+            # Make it viewable so =IMAGE() can render it.
+            self._session.post(
+                f"https://www.googleapis.com/drive/v3/files/{file_id}/permissions",
+                json={"role": "reader", "type": "anyone"}, timeout=20)
+            return f"https://drive.google.com/uc?export=view&id={file_id}"
+        except Exception as exc:  # noqa: BLE001
+            log.warning("Drive image upload failed: %s", exc)
+            return None
+
+
+def _col_letter(n: int) -> str:
+    """1-indexed column number → spreadsheet letter (1→A, 27→AA)."""
+    s = ""
+    while n > 0:
+        n, r = divmod(n - 1, 26)
+        s = chr(65 + r) + s
+    return s
+
+
+def _appended_row_number(resp: Any) -> int | None:
+    try:
+        rng = resp["updates"]["updatedRange"]  # e.g. "Articles!A5:P5"
+        cell = rng.split("!", 1)[1].split(":", 1)[0]  # "A5"
+        digits = "".join(ch for ch in cell if ch.isdigit())
+        return int(digits) if digits else None
+    except Exception:  # noqa: BLE001
+        return None
 
 ARTICLE_HEADERS = [
     "Captured At", "Title", "Type", "Summary", "Catch Points",
     "Vivax Relevance", "Vivax Use Cases", "Entities", "Tags", "Links",
     "Source", "Verified", "Verification Notes", "Confidence", "Submitted By",
+    "Image",
 ]
 
 EVENT_HEADERS = [
@@ -58,6 +147,7 @@ EVENT_HEADERS = [
     "Required Materials", "Application Steps", "Application URL", "Cost",
     "Catch Points", "Vivax Relevance", "Should Apply", "Verified",
     "Deadline Confidence", "Verification Notes", "Source", "Submitted By",
+    "Image",
 ]
 
 
@@ -74,11 +164,37 @@ def _fmt(value: Any) -> str:
 class SheetsClient:
     def __init__(self, auth_mode: str, service_account_file: str,
                  token_file: str, articles_id: str, events_id: str) -> None:
-        self._gc = build_gspread_client(auth_mode, service_account_file, token_file)
+        self._gc, self._creds = build_gspread_client(
+            auth_mode, service_account_file, token_file)
+        try:
+            self._drive: DriveUploader | None = DriveUploader(self._creds)
+        except Exception as exc:  # noqa: BLE001
+            log.warning("Drive uploader unavailable (images won't be saved): %s", exc)
+            self._drive = None
         self._articles = self._open_or_create(articles_id, "Briefer — Articles",
                                               ARTICLE_HEADERS)
         self._events = self._open_or_create(events_id, "Briefer — Events",
                                             EVENT_HEADERS)
+
+    def _save_image(self, worksheet: gspread.Worksheet, row: int | None,
+                    col: int, images: list[tuple[bytes, str]] | None) -> None:
+        """Upload the first image and drop an =IMAGE() formula in its cell.
+
+        The row's data is written RAW (untrusted). This is a SEPARATE,
+        app-controlled formula write, so no untrusted content becomes a
+        formula."""
+        if not images or not row or not self._drive:
+            return
+        data, mime = images[0]
+        url = self._drive.upload_image(data, mime, f"briefer_{row}.jpg")
+        if not url:
+            return
+        cell = f"{_col_letter(col)}{row}"
+        try:
+            worksheet.update([[f'=IMAGE("{url}")']], cell,
+                             value_input_option="USER_ENTERED")
+        except Exception as exc:  # noqa: BLE001
+            log.warning("could not set image cell: %s", exc)
 
     @property
     def articles_id(self) -> str:
@@ -113,7 +229,8 @@ class SheetsClient:
         ws.freeze(rows=1)
         return ws
 
-    def append_article(self, a: dict[str, Any], source: str, user: str) -> None:
+    def append_article(self, a: dict[str, Any], source: str, user: str,
+                       images: list[tuple[bytes, str]] | None = None) -> int | None:
         now = datetime.now(timezone.utc).astimezone().isoformat(timespec="seconds")
         issues = a.get("_verification_issues") or []
         row = [
@@ -132,12 +249,17 @@ class SheetsClient:
             _fmt([f"{i.get('field')}: {i.get('problem')}" for i in issues]),
             _fmt(a.get("confidence")),
             _fmt(user),
+            "",  # Image (filled separately, as a controlled formula)
         ]
         # RAW (not USER_ENTERED): untrusted content must never be parsed as a
         # formula (=IMPORTXML/HYPERLINK exfiltration). RAW stores it verbatim.
-        self._articles.append_row(row, value_input_option="RAW")
+        resp = self._articles.append_row(row, value_input_option="RAW")
+        rownum = _appended_row_number(resp)
+        self._save_image(self._articles, rownum, len(ARTICLE_HEADERS), images)
+        return rownum
 
-    def append_event(self, e: dict[str, Any], source: str, user: str) -> None:
+    def append_event(self, e: dict[str, Any], source: str, user: str,
+                     images: list[tuple[bytes, str]] | None = None) -> int | None:
         now = datetime.now(timezone.utc).astimezone().isoformat(timespec="seconds")
         issues = e.get("_verification_issues") or []
         row = [
@@ -163,5 +285,9 @@ class SheetsClient:
             _fmt([f"{i.get('field')}: {i.get('problem')}" for i in issues]),
             _fmt(source),
             _fmt(user),
+            "",  # Image
         ]
-        self._events.append_row(row, value_input_option="RAW")
+        resp = self._events.append_row(row, value_input_option="RAW")
+        rownum = _appended_row_number(resp)
+        self._save_image(self._events, rownum, len(EVENT_HEADERS), images)
+        return rownum

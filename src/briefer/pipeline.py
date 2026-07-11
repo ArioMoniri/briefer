@@ -34,6 +34,7 @@ class Result:
     deadline_dt: Optional[datetime] = None
     event_dt: Optional[datetime] = None
     event_all_day: bool = False
+    sheet_row: Optional[int] = None
 
 
 class Pipeline:
@@ -72,10 +73,11 @@ class Pipeline:
         merged = analysis.apply_corrections(raw, verification)
 
         source = _source_label(content)
+        images = _collect_images(content)
         if kind == "event":
-            self.sheets.append_event(merged, source, submitted_by)
+            row = self.sheets.append_event(merged, source, submitted_by, images)
         else:
-            self.sheets.append_article(merged, source, submitted_by)
+            row = self.sheets.append_article(merged, source, submitted_by, images)
 
         self.store.mark_seen(fp, kind)
 
@@ -83,7 +85,25 @@ class Pipeline:
         event_dt, all_day = _parse_event_date(merged.get("event_date"))
         return Result(kind=kind, analysis=merged, source=source,
                       deadline_dt=deadline_dt, event_dt=event_dt,
-                      event_all_day=all_day)
+                      event_all_day=all_day, sheet_row=row)
+
+
+def _collect_images(content: EnrichedContent, limit: int = 3
+                    ) -> list[tuple[bytes, str]]:
+    """Pull decoded image bytes from image attachments (photos, screenshots,
+    tweet images, video keyframes) so they can be saved into the sheet."""
+    import base64
+    out: list[tuple[bytes, str]] = []
+    for att in content.attachments:
+        if att.kind == "image" and att.data_b64:
+            try:
+                out.append((base64.b64decode(att.data_b64),
+                            att.media_type or "image/jpeg"))
+            except Exception:  # noqa: BLE001
+                continue
+        if len(out) >= limit:
+            break
+    return out
 
 
 def _source_label(content: EnrichedContent) -> str:

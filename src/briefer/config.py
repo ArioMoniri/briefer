@@ -92,6 +92,7 @@ class Config:
     media_max_bytes: int
     video_keyframes: int
     enable_gallery_dl: bool
+    enable_browser_fallback: bool
 
     # Behaviour
     max_download_bytes: int
@@ -192,6 +193,9 @@ def load_config() -> Config:
         media_max_bytes=_get_int("MEDIA_MAX_BYTES", 50_000_000),
         video_keyframes=_get_int("VIDEO_KEYFRAMES", 4),
         enable_gallery_dl=_get_bool("ENABLE_GALLERY_DL", True),
+        # On by default but a no-op until Playwright + a browser are installed
+        # (./manage.sh enable-browser).
+        enable_browser_fallback=_get_bool("ENABLE_BROWSER_FALLBACK", True),
         company_name=_get("COMPANY_NAME", "Vivax"),
         company_url=_get("COMPANY_URL", "https://getvivax.com"),
         company_focus=_get(

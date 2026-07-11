@@ -170,6 +170,38 @@ def test_bot_commands_cover_key_commands():
         assert required in names
 
 
+def test_job_queue_flow():
+    import tempfile
+    from briefer.storage import Store
+    s = Store(Path(tempfile.mktemp(suffix=".db")))
+    try:
+        j1 = s.enqueue_job(1, "me", "a", [{"t": "image", "file_id": "x"}], None, 10)
+        j2 = s.enqueue_job(1, "me", "b", [], "event", 11)
+        assert s.pending_count() == 2
+        job = s.claim_next_job()
+        assert job["id"] == j1 and job["attachments"][0]["file_id"] == "x"
+        # crash + resume
+        assert s.requeue_processing() == 1
+        again = s.claim_next_job()
+        assert again["id"] == j1
+        s.finish_job(j1, "done")
+        assert s.claim_next_job()["id"] == j2
+        s.finish_job(j2, "done")
+        assert s.claim_next_job() is None and s.pending_count() == 0
+        s.set_meta("article_last_row", 7)
+        assert s.get_meta("article_last_row") == "7"
+        assert s.incr_meta("processed_total") == 1
+    finally:
+        s.close()
+
+
+def test_sheet_column_and_row_helpers():
+    from briefer.sheets import _col_letter, _appended_row_number
+    assert _col_letter(1) == "A" and _col_letter(16) == "P" and _col_letter(27) == "AA"
+    assert _appended_row_number({"updates": {"updatedRange": "Events!A12:W12"}}) == 12
+    assert _appended_row_number({"bad": 1}) is None
+
+
 def test_guess_media_type():
     from briefer.media import guess_media_type
     assert guess_media_type(b"\xff\xd8\xff\xe0xx") == "image/jpeg"

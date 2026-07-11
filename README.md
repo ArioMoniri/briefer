@@ -104,6 +104,36 @@ teammates afterwards, just send `/allow <their_chat_id>` from an admin chat —
 no restart, no file editing. They still need the shared `/login` password.
 Runtime additions persist in the local DB and appear in `/allowlist`.
 
+## Queue, resume & checkpoints
+
+- **Send many at once** — every message is added to a **durable SQLite queue**
+  and a **single worker** processes them **one at a time**, so nothing is
+  missed and the model/API is never overwhelmed. Each item's status message
+  updates in place: *Queued → Analysing → result*.
+- **Survives restarts** — the queue and attachments (stored as Telegram
+  `file_id`s, re-downloaded on processing) persist. On startup, any job that
+  was mid-flight is **requeued**, and pending jobs continue. The bot records
+  the **last sheet row written** per sheet plus the processed count and last
+  time, all shown in `/status`.
+
+## Images in the sheet
+
+Image attachments (photos, screenshots, tweet images) are uploaded to a
+`Briefer Images` folder in your Drive and embedded in the sheet's **Image**
+column via `=IMAGE(...)`. The row's untrusted data is still written `RAW`;
+only the app-generated image formula is `USER_ENTERED`, so no forwarded
+content can become a formula.
+
+## Browser fallback (optional)
+
+Some pages (LinkedIn, JS-only SPAs) return almost no text to a plain fetch.
+Install a headless browser and Briefer will render those pages:
+```bash
+./manage.sh enable-browser      # installs Playwright + Chromium into the venv
+```
+It activates automatically only when the normal fetch comes back thin, and
+is a no-op (graceful) if not installed. Toggle with `ENABLE_BROWSER_FALLBACK`.
+
 ## Video & tweet parsing
 
 - **Tweets / X posts**: send a status link and Briefer extracts the post text,

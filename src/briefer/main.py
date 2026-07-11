@@ -64,7 +64,8 @@ def main() -> int:
         keyframes=cfg.video_keyframes)
     enricher = Enricher(cfg.max_download_bytes, tweet_extractor=tweets,
                         transcriber=transcriber,
-                        enable_gallery_dl=cfg.enable_gallery_dl)
+                        enable_gallery_dl=cfg.enable_gallery_dl,
+                        enable_browser=cfg.enable_browser_fallback)
     try:
         sheets = SheetsClient(
             cfg.google_auth_mode, str(cfg.service_account_path),

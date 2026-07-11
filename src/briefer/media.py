@@ -24,7 +24,7 @@ from typing import Any
 
 import httpx
 
-from .security import is_safe_url
+from .security import is_safe_url, safe_resolve
 
 log = logging.getLogger("briefer.media")
 

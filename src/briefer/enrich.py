@@ -80,12 +80,13 @@ class EnrichedContent:
 class Enricher:
     def __init__(self, max_bytes: int, tweet_extractor=None,
                  transcriber=None, enable_gallery_dl: bool = True,
-                 gallery_max_images: int = 6) -> None:
+                 gallery_max_images: int = 6, enable_browser: bool = False) -> None:
         self.max_bytes = max_bytes
         self.tweets = tweet_extractor
         self.transcriber = transcriber
         self.enable_gallery_dl = enable_gallery_dl
         self.gallery_max_images = gallery_max_images
+        self.enable_browser = enable_browser
 
     def _try_gallery(self, url: str, content: EnrichedContent) -> int:
         """Fallback downloader for image posts → vision. Returns #images."""
@@ -297,15 +298,36 @@ class Enricher:
                 return
         resp = self._fetch(url)
         if not resp:
-            content.notes.append(f"Could not fetch {url} (blocked or unreachable).")
+            # Plain fetch blocked/failed — try the headless browser if enabled.
+            rendered = self._browser_render(url)
+            if rendered:
+                content.link_texts[url] = rendered
+            else:
+                content.notes.append(f"Could not fetch {url} (blocked or unreachable).")
             return
         ctype = resp.headers.get("content-type", "")
         if "application/pdf" in ctype:
             content.link_texts[url] = _pdf_to_text(resp.content)
         elif "text/html" in ctype or "text/plain" in ctype or not ctype:
-            content.link_texts[url] = self._extract_html_text(resp.text)
+            text = self._extract_html_text(resp.text)
+            # Thin result (JS page / login wall) → try the headless browser.
+            if len(text) < 400:
+                rendered = self._browser_render(url)
+                if len(rendered) > len(text):
+                    text = rendered
+            content.link_texts[url] = text
         else:
             content.notes.append(f"{url}: unsupported content-type {ctype}.")
+
+    def _browser_render(self, url: str) -> str:
+        if not self.enable_browser:
+            return ""
+        try:
+            from .browser import fetch_rendered
+            return fetch_rendered(url)
+        except Exception as exc:  # noqa: BLE001
+            log.warning("browser fallback error for %s: %s", url, exc)
+            return ""
 
 
 def _pdf_to_text(data: bytes) -> str:

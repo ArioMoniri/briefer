@@ -42,6 +42,8 @@ class BrieferBot:
         self.rate = RateLimiter(cfg.rate_limit_per_minute)
         salt, h = hash_password(cfg.login_password)
         self._pw_salt, self._pw_hash = salt, h
+        self._wake: asyncio.Event | None = None
+        self._worker_task: asyncio.Task | None = None
 
     # ------------------------------------------------------------------
     # Auth helpers
@@ -210,10 +212,19 @@ class BrieferBot:
         a = self.pipeline.sheets.articles_id
         e = self.pipeline.sheets.events_id
         media = "on" if self.cfg.enable_transcription else "off"
+        queued = self.store.pending_count()
+        done = self.store.get_meta("processed_total", "0")
+        last_at = self.store.get_meta("last_processed_at", "")
+        when = (datetime.fromtimestamp(int(last_at)).strftime("%Y-%m-%d %H:%M")
+                if last_at.isdigit() else "never")
+        art_row = self.store.get_meta("article_last_row", "?")
+        evt_row = self.store.get_meta("event_last_row", "?")
         await self._reply(
             update,
             "💚 *Status*\n"
             f"Uptime: {up}\n"
+            f"Queue: {queued} waiting · processed: {done} · last: {when}\n"
+            f"Last row — Articles: {art_row}, Events: {evt_row}\n"
             f"Model: `{self.cfg.model}` / verify `{self.cfg.verify_model}`\n"
             f"Transcription: {media} · keyframes: {self.cfg.video_keyframes}\n"
             f"Reminder lead times: {self.cfg.deadline_reminder_hours} h\n"
@@ -299,7 +310,7 @@ class BrieferBot:
             return
         text = " ".join(ctx.args) if ctx.args else ""
         if text:
-            await self._ingest(update, ctx, text=text, attachments=[], force_kind=kind)
+            await self._enqueue(update, text, [], kind)
         else:
             ctx.user_data["force_kind"] = kind
             await self._reply(update, f"OK — send the {kind} content now.")
@@ -341,115 +352,199 @@ class BrieferBot:
             return
         msg = update.message
         text = (msg.text or msg.caption or "")[:MAX_TEXT]
-        attachments: list[Attachment] = []
 
         try:
-            attachments = await self._collect_attachments(msg)
+            descriptors = await self._collect_descriptors(msg)
         except _TooLarge as exc:
             await self._reply(update, f"⚠️ {exc}")
             return
-        except Exception as exc:  # noqa: BLE001
-            log.exception("attachment error")
+        except Exception:  # noqa: BLE001
+            log.exception("attachment descriptor error")
             await self._reply(update, "⚠️ I couldn't read that attachment.")
             return
 
-        if not text and not attachments:
+        if not text and not descriptors:
             await self._reply(update, "Send text, a link, a file, an image or an event.")
             return
 
         force_kind = ctx.user_data.pop("force_kind", None)
-        await self._ingest(update, ctx, text=text, attachments=attachments,
-                           force_kind=force_kind)
+        await self._enqueue(update, text, descriptors, force_kind)
 
-    async def _collect_attachments(self, msg) -> list[Attachment]:
-        out: list[Attachment] = []
+    async def _collect_descriptors(self, msg) -> list[dict[str, Any]]:
+        """Describe attachments by Telegram file_id (not bytes), so a queued
+        job survives a restart — the worker re-downloads from Telegram."""
+        out: list[dict[str, Any]] = []
         limit = self.cfg.max_download_bytes
 
         if msg.photo:
-            photo = msg.photo[-1]  # largest
-            if (photo.file_size or 0) > limit:
+            p = msg.photo[-1]  # largest
+            if (p.file_size or 0) > limit:
                 raise _TooLarge("That image is too large.")
-            f = await photo.get_file()
-            data = bytes(await f.download_as_bytearray())
-            out.append(make_image_attachment(data, "image/jpeg", "photo.jpg"))
+            out.append({"t": "image", "file_id": p.file_id,
+                        "mime": "image/jpeg", "name": "photo.jpg"})
 
-        # Video / audio / voice → transcribe. (Telegram bots can download up
-        # to ~20 MB; larger media should be sent as a link instead.)
         media = msg.video or msg.video_note or msg.animation or msg.audio or msg.voice
         if media is not None:
             if (getattr(media, "file_size", 0) or 0) > limit:
                 raise _TooLarge("That media is too large to download (send a link).")
-            f = await media.get_file()
-            data = bytes(await f.download_as_bytearray())
             mtype = getattr(media, "mime_type", "") or "application/octet-stream"
-            fname = getattr(media, "file_name", "") or ("media." + (
+            name = getattr(media, "file_name", "") or ("media." + (
                 mtype.split("/")[-1] if "/" in mtype else "bin"))
-            out.append(make_media_attachment(data, mtype, fname))
+            out.append({"t": "media", "file_id": media.file_id,
+                        "mime": mtype, "name": name})
 
         doc = msg.document
         if doc:
             if (doc.file_size or 0) > limit:
                 raise _TooLarge("That file is too large.")
-            f = await doc.get_file()
-            data = bytes(await f.download_as_bytearray())
             mime = doc.mime_type or ""
             name = doc.file_name or "file"
             if mime == "application/pdf" or name.lower().endswith(".pdf"):
-                out.append(make_pdf_attachment(data, name))
+                out.append({"t": "pdf", "file_id": doc.file_id, "mime": mime, "name": name})
             elif mime.startswith("image/"):
-                out.append(make_image_attachment(data, mime, name))
+                out.append({"t": "image", "file_id": doc.file_id, "mime": mime, "name": name})
             elif mime.startswith("text/") or name.lower().endswith(
                 (".txt", ".md", ".csv", ".json", ".log")
             ):
-                out.append(make_text_attachment(data, name, mime or "text/plain"))
+                out.append({"t": "text", "file_id": doc.file_id,
+                            "mime": mime or "text/plain", "name": name})
             else:
-                # Unknown binary: don't execute or parse it, just note it.
-                out.append(Attachment(kind="file", media_type=mime, filename=name,
-                                      text=f"(binary file '{name}', {len(data)} bytes, not parsed)"))
+                out.append({"t": "filenote", "name": name, "size": doc.file_size or 0})
         return out
 
-    async def _ingest(self, update: Update, ctx: ContextTypes.DEFAULT_TYPE, *,
-                      text: str, attachments: list[Attachment],
-                      force_kind: str | None) -> None:
-        chat = update.effective_chat
-        user = update.effective_user
-        submitter = _submitter(user)
-        await ctx.bot.send_chat_action(chat.id, ChatAction.TYPING)
-        note = await update.message.reply_text("🧠 Analysing & double-checking…")
+    async def _materialize(self, bot, descriptors: list[dict[str, Any]]
+                           ) -> list[Attachment]:
+        """Turn stored file_id descriptors back into Attachment objects by
+        re-downloading from Telegram at processing time."""
+        out: list[Attachment] = []
+        for d in descriptors:
+            t = d.get("t")
+            if t == "filenote":
+                out.append(Attachment(
+                    kind="file", media_type="", filename=d.get("name", "file"),
+                    text=f"(binary file '{d.get('name')}', "
+                         f"{d.get('size', 0)} bytes, not parsed)"))
+                continue
+            try:
+                f = await bot.get_file(d["file_id"])
+                data = bytes(await f.download_as_bytearray())
+            except Exception as exc:  # noqa: BLE001
+                log.warning("could not re-download %s: %s", d.get("name"), exc)
+                out.append(Attachment(kind="file", media_type="",
+                                      filename=d.get("name", "file"),
+                                      text="(attachment could not be downloaded)"))
+                continue
+            if t == "image":
+                out.append(make_image_attachment(data, d.get("mime", "image/jpeg"),
+                                                 d.get("name", "image")))
+            elif t == "pdf":
+                out.append(make_pdf_attachment(data, d.get("name", "file.pdf")))
+            elif t == "text":
+                out.append(make_text_attachment(data, d.get("name", "file"),
+                                                d.get("mime", "text/plain")))
+            elif t == "media":
+                out.append(make_media_attachment(
+                    data, d.get("mime", "application/octet-stream"),
+                    d.get("name", "media")))
+        return out
 
+    # ------------------------------------------------------------------
+    # Durable queue + single worker (process one item at a time)
+    # ------------------------------------------------------------------
+    async def _enqueue(self, update: Update, text: str,
+                       descriptors: list[dict[str, Any]],
+                       force_kind: str | None) -> None:
+        chat = update.effective_chat
+        submitter = _submitter(update.effective_user)
+        ahead = self.store.pending_count()
+        if ahead == 0:
+            note_txt = "🧠 Working on it…"
+        else:
+            note_txt = (f"📥 Queued — {ahead} item(s) ahead of you. "
+                        "I'll analyse this and reply here.")
+        note = await update.message.reply_text(note_txt)
+        self.store.enqueue_job(chat.id, submitter, text, descriptors,
+                               force_kind, note.message_id)
+        self._wake_worker()
+
+    def _wake_worker(self) -> None:
+        if self._wake is not None:
+            self._wake.set()
+
+    async def _worker_loop(self, app: "Application") -> None:
+        assert self._wake is not None
+        while True:
+            try:
+                await self._wake.wait()
+                self._wake.clear()
+                while True:
+                    job = self.store.claim_next_job()
+                    if not job:
+                        break
+                    await self._process_job(app, job)
+            except asyncio.CancelledError:
+                raise
+            except Exception:  # noqa: BLE001
+                log.exception("worker loop error")
+                await asyncio.sleep(2)
+
+    async def _process_job(self, app: "Application", job: dict[str, Any]) -> None:
+        bot = app.bot
+        chat_id = job["chat_id"]
+        note_id = job["note_message_id"]
+
+        async def edit(text: str, **kw) -> None:
+            if note_id:
+                try:
+                    await bot.edit_message_text(text, chat_id=chat_id,
+                                                message_id=note_id, **kw)
+                    return
+                except Exception:  # noqa: BLE001
+                    pass
+            try:
+                await bot.send_message(chat_id, text, **kw)
+            except Exception:  # noqa: BLE001
+                pass
+
+        await edit("🧠 Analysing & double-checking…")
         try:
+            attachments = await self._materialize(bot, job["attachments"])
             result: Result = await asyncio.to_thread(
-                self.pipeline.process, text, attachments, submitter, force_kind
-            )
+                self.pipeline.process, job["text"], attachments,
+                job["submitter"], job["force_kind"])
         except Exception as exc:  # noqa: BLE001
-            log.exception("pipeline failure")
-            # Surface the real reason to the (already-authenticated) user, and
-            # keep it for /logs. Truncated so we never dump a huge traceback.
+            log.exception("pipeline failure (job %s)", job["id"])
             reason = f"{type(exc).__name__}: {exc}"
-            ctx.application.bot_data["last_error"] = reason
-            await note.edit_text(
-                "⚠️ Analysis failed.\n<code>" + html.escape(reason[:350])
-                + "</code>\nSee <b>/logs</b> for detail.",
-                parse_mode=ParseMode.HTML)
+            app.bot_data["last_error"] = reason
+            self.store.finish_job(job["id"], "failed", reason)
+            await edit("⚠️ Analysis failed.\n<code>" + html.escape(reason[:350])
+                       + "</code>\nSee <b>/logs</b> for detail.",
+                       parse_mode=ParseMode.HTML)
             return
 
         if result.duplicate:
-            await note.edit_text("♻️ I've already processed this one — skipping the sheet.")
+            self.store.finish_job(job["id"], "done")
+            await edit("♻️ Already processed this one — skipping the sheet.")
             return
 
-        await note.edit_text(_format_catch(result), parse_mode=ParseMode.HTML,
-                             disable_web_page_preview=True)
+        await edit(_format_catch(result), parse_mode=ParseMode.HTML,
+                   disable_web_page_preview=True)
+        # Checkpoint so /status shows progress and resets know where we are.
+        self.store.set_meta("last_processed_at", int(time.time()))
+        self.store.incr_meta("processed_total", 1)
+        if getattr(result, "sheet_row", None):
+            self.store.set_meta(f"{result.kind}_last_row", result.sheet_row)
+        self.store.finish_job(job["id"], "done")
 
         if result.kind == "event":
             if result.deadline_dt:
-                self._schedule_deadline(chat.id, result)
-            await self._send_calendar(ctx, chat.id, result)
+                self._schedule_deadline(chat_id, result)
+            await self._send_calendar(bot, chat_id, result)
 
     # ------------------------------------------------------------------
     # Calendar (.ics) export
     # ------------------------------------------------------------------
-    async def _send_calendar(self, ctx: ContextTypes.DEFAULT_TYPE, chat_id: int,
-                             result: Result) -> None:
+    async def _send_calendar(self, bot, chat_id: int, result: Result) -> None:
         a = result.analysis
         # Prefer the event date; fall back to the application deadline so you
         # still get a calendar entry + alarms for the last day to apply.
@@ -491,7 +586,7 @@ class BrieferBot:
         kb = InlineKeyboardMarkup(
             [[InlineKeyboardButton("➕ Google Calendar", url=gcal)]]) if gcal else None
         try:
-            await ctx.bot.send_document(
+            await bot.send_document(
                 chat_id,
                 document=InputFile(io.BytesIO(ics), filename=fname),
                 caption="📅 Tap the file → *Add to Calendar* (Apple/Android). "
@@ -715,17 +810,23 @@ BOT_COMMANDS = [
 ]
 
 
-async def _post_init(app: Application) -> None:
-    # Registers the command list so typing "/" in Telegram pops up the menu.
-    from telegram import BotCommand
-
-    try:
-        await app.bot.set_my_commands([BotCommand(c, d) for c, d in BOT_COMMANDS])
-    except Exception:  # noqa: BLE001
-        log.warning("set_my_commands failed", exc_info=True)
-
-
 def build_application(cfg: Config, bot: BrieferBot) -> Application:
+    async def _post_init(app: Application) -> None:
+        from telegram import BotCommand
+
+        # Registers the command list so typing "/" pops up the menu.
+        try:
+            await app.bot.set_my_commands([BotCommand(c, d) for c, d in BOT_COMMANDS])
+        except Exception:  # noqa: BLE001
+            log.warning("set_my_commands failed", exc_info=True)
+        # Start the single background worker and resume any leftover jobs.
+        bot._wake = asyncio.Event()
+        n = bot.store.requeue_processing()
+        if n:
+            log.info("Requeued %d interrupted job(s) after restart", n)
+        bot._worker_task = asyncio.create_task(bot._worker_loop(app))
+        bot._wake.set()  # drain anything already queued
+
     app = (Application.builder().token(cfg.telegram_token)
            .post_init(_post_init).build())
     app.bot_data["started_at"] = time.time()
