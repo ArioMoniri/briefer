@@ -58,30 +58,24 @@ def _rng(seed):
     return r
 
 
-def _rough_rect(x, y, w, h, r=16, seed=1, jitter=1.1):
-    """A rounded rect as a gently-wobbly *closed* path — hand-drawn but with no
-    torn corners. Each corner shares one jittered anchor so edges always meet."""
+def _rough_rect(x, y, w, h, r=16, seed=1, jitter=1.4):
+    """A rounded rect with *exact* corners and gently-bowed straight edges — a
+    hand-drawn feel with no torn/notched corners. Corners are clean quarter
+    arcs at their true positions; only each edge's midpoint is nudged."""
     rng = _rng(seed)
-    def j():
+    def b():  # tiny perpendicular bump for an edge midpoint
         return (rng() - 0.5) * 2 * jitter
-    # one jittered anchor per corner side, reused so the path closes cleanly
-    tl = (x + r + j(), y + j())          # top-left (after radius)
-    tr = (x + w - r + j(), y + j())      # top-right (before radius)
-    rt = (x + w + j(), y + r + j())      # right-top
-    rb = (x + w + j(), y + h - r + j())  # right-bottom
-    br = (x + w - r + j(), y + h + j())  # bottom-right
-    bl = (x + r + j(), y + h + j())      # bottom-left
-    lb = (x + j(), y + h - r + j())      # left-bottom
-    lt = (x + j(), y + r + j())          # left-top
-    d = (f"M {tl[0]:.1f} {tl[1]:.1f} "
-         f"L {tr[0]:.1f} {tr[1]:.1f} "
-         f"Q {x+w:.1f} {y:.1f} {rt[0]:.1f} {rt[1]:.1f} "
-         f"L {rb[0]:.1f} {rb[1]:.1f} "
-         f"Q {x+w:.1f} {y+h:.1f} {br[0]:.1f} {br[1]:.1f} "
-         f"L {bl[0]:.1f} {bl[1]:.1f} "
-         f"Q {x:.1f} {y+h:.1f} {lb[0]:.1f} {lb[1]:.1f} "
-         f"L {lt[0]:.1f} {lt[1]:.1f} "
-         f"Q {x:.1f} {y:.1f} {tl[0]:.1f} {tl[1]:.1f} Z")
+    d = (
+        f"M {x+r:.1f} {y:.1f} "
+        f"Q {x+w/2:.1f} {y+b():.1f} {x+w-r:.1f} {y:.1f} "        # top edge
+        f"Q {x+w:.1f} {y:.1f} {x+w:.1f} {y+r:.1f} "             # TR corner
+        f"Q {x+w+b():.1f} {y+h/2:.1f} {x+w:.1f} {y+h-r:.1f} "   # right edge
+        f"Q {x+w:.1f} {y+h:.1f} {x+w-r:.1f} {y+h:.1f} "         # BR corner
+        f"Q {x+w/2:.1f} {y+h+b():.1f} {x+r:.1f} {y+h:.1f} "     # bottom edge
+        f"Q {x:.1f} {y+h:.1f} {x:.1f} {y+h-r:.1f} "             # BL corner
+        f"Q {x+b():.1f} {y+h/2:.1f} {x:.1f} {y+r:.1f} "         # left edge
+        f"Q {x:.1f} {y:.1f} {x+r:.1f} {y:.1f} Z"                # TL corner
+    )
     return d
 
 

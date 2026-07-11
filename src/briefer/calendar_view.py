@@ -306,11 +306,20 @@ function renderYear(){
   return h+'</div>';
 }
 function draw(){
-  document.querySelectorAll("header button[data-v]").forEach(b=>
-    b.classList.toggle("active",b.dataset.v===view));
-  const r=document.getElementById("root");
-  r.innerHTML=({month:renderMonth,week:renderWeek,day:renderDay,
-                year:renderYear,list:renderList})[view]();
+  try{
+    document.querySelectorAll("header button[data-v]").forEach(b=>
+      b.classList.toggle("active",b.dataset.v===view));
+    const r=document.getElementById("root");
+    r.innerHTML=({month:renderMonth,week:renderWeek,day:renderDay,
+                  year:renderYear,list:renderList})[view]();
+    if(!EVENTS.length){
+      r.innerHTML+='<div class="hint">No dated items yet — add an event or a '+
+        'deadline (or a Remind At date in the sheet) and it shows up here.</div>';
+    }
+  }catch(err){
+    document.getElementById("root").innerHTML=
+      '<div class="hint">Calendar error: '+esc(String(err))+'</div>';
+  }
 }
 function setView(v){view=v;draw();}
 function nav(n){if(view==="year")cur.setFullYear(cur.getFullYear()+n);
@@ -319,6 +328,11 @@ function nav(n){if(view==="year")cur.setFullYear(cur.getFullYear()+n);
   else cur.setMonth(cur.getMonth()+n);draw();}
 function today(){cur=new Date();cur.setHours(0,0,0,0);draw();}
 function goto(s){cur=new Date(s+"T00:00");view="day";draw();}
+// Wire buttons via listeners too (works even where inline onclick is blocked).
+document.addEventListener("DOMContentLoaded",function(){
+  document.querySelectorAll("header button[data-v]").forEach(b=>
+    b.addEventListener("click",()=>setView(b.dataset.v)));
+});
 // jump to the first upcoming item so the view opens somewhere useful.
 (function(){const up=Object.keys(byDate).sort().find(k=>k>=iso(new Date()));
   if(up)cur=new Date(up+"T00:00");draw();})();
