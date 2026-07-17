@@ -12,9 +12,40 @@ import re
 from typing import Any
 
 from anthropic import Anthropic
-from tenacity import retry, stop_after_attempt, wait_exponential
+from tenacity import (retry, retry_if_exception, stop_after_attempt,
+                      wait_exponential)
 
 log = logging.getLogger("briefer.llm")
+
+# Anthropic accepts jpeg/png/gif/webp, each ≤ 5 MB and a bounded count. Keep
+# well under that so a stray/oversized frame can't trigger a 400/500.
+_OK_MEDIA = {"image/jpeg", "image/png", "image/gif", "image/webp"}
+_MAX_IMG_B64 = 4_500_000   # ~3.3 MB decoded
+_MAX_IMAGES = 8
+
+
+def _should_retry(exc: BaseException) -> bool:
+    """Retry only transient failures — 5xx, 429 and connection errors — never
+    a 4xx client error (a bad request won't get better by repeating)."""
+    sc = getattr(exc, "status_code", None)
+    if sc is None:
+        return True  # connection/unknown → worth a retry
+    return sc == 429 or sc >= 500
+
+
+def _sanitize_images(images: list[dict[str, str]] | None) -> list[dict[str, str]]:
+    out: list[dict[str, str]] = []
+    for img in images or []:
+        data = img.get("data") or ""
+        mt = img.get("media_type") or "image/jpeg"
+        if mt not in _OK_MEDIA:
+            mt = "image/jpeg"
+        if not data or len(data) > _MAX_IMG_B64:
+            continue  # drop empty or oversized frames
+        out.append({"media_type": mt, "data": data})
+        if len(out) >= _MAX_IMAGES:
+            break
+    return out
 
 # Prepended to every system prompt: the model must treat everything the
 # user forwards as data to analyse, never as instructions to follow.
@@ -34,7 +65,8 @@ class LLM:
         self.model = model
         self.verify_model = verify_model
 
-    @retry(stop=stop_after_attempt(3),
+    @retry(retry=retry_if_exception(_should_retry),
+           stop=stop_after_attempt(4),
            wait=wait_exponential(multiplier=1, min=2, max=20))
     def _call(self, model: str, system: str, user: str,
               images: list[dict[str, str]] | None = None,
@@ -63,7 +95,20 @@ class LLM:
              model: str | None = None,
              max_tokens: int = 2000) -> dict[str, Any]:
         chosen = model or (self.verify_model if verify else self.model)
-        raw = self._call(chosen, system, user, images=images, max_tokens=max_tokens)
+        imgs = _sanitize_images(images)
+        try:
+            raw = self._call(chosen, system, user, images=imgs,
+                             max_tokens=max_tokens)
+        except Exception:  # noqa: BLE001
+            if imgs:
+                # A multimodal request that keeps failing is most often the
+                # image payload — retry text-only so the item still analyses
+                # (degraded: transcript/caption without the visual frames).
+                log.warning("multimodal call failed; retrying without images")
+                raw = self._call(chosen, system, user, images=None,
+                                 max_tokens=max_tokens)
+            else:
+                raise
         return _extract_json(raw)
 
 

@@ -1231,6 +1231,9 @@ def _error_message(exc: BaseException | None) -> tuple[str, bool]:
     if "overloaded" in low or "529" in s:
         return ("🌩️ Anthropic API is overloaded right now. Retrying shortly.",
                 True)
+    if "500" in s or "internal error" in low or name == "InternalServerError":
+        return ("🌩️ Anthropic API had a temporary error (500). It already "
+                "retried a few times — just send it again in a moment.", False)
     return f"{name}: {s[:300]}", False
 
 

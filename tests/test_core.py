@@ -249,6 +249,43 @@ def test_reply_mapping_and_case_insensitive_people():
     s.close()
 
 
+def test_llm_falls_back_to_text_only_on_image_500():
+    """A multimodal request that 500s retries text-only so the item still
+    analyses; sanitizer drops oversized/bad frames and caps count; the retry
+    predicate skips 4xx."""
+    from briefer.llm import LLM, _sanitize_images, _should_retry
+
+    kept = _sanitize_images(
+        [{"media_type": "image/jpeg", "data": "AAAA"},
+         {"media_type": "image/tiff", "data": "BBBB"},
+         {"media_type": "image/png", "data": "C" * 5_000_000},
+         {"media_type": "image/png", "data": ""}]
+        + [{"media_type": "image/jpeg", "data": "x"} for _ in range(20)])
+    assert len(kept) == 8 and all(i["media_type"] == "image/jpeg" for i in kept)
+
+    class E(Exception):
+        def __init__(self, sc): self.status_code = sc
+    assert _should_retry(E(500)) and _should_retry(E(429))
+    assert not _should_retry(E(400)) and not _should_retry(E(401))
+
+    class FakeMsgs:
+        # status_code 400 → not retried (no backoff wait), but json() still
+        # falls back to a text-only call, which succeeds. Keeps the test fast;
+        # the 500-retry behaviour is covered by the _should_retry asserts above.
+        def create(self, *, model, max_tokens, system, messages):
+            if any(b.get("type") == "image" for b in messages[0]["content"]):
+                e = Exception("[400]: image rejected"); e.status_code = 400
+                raise e
+            class R:
+                content = [type("B", (), {"type": "text", "text": '{"ok": true}'})()]
+            return R()
+    llm = LLM.__new__(LLM)
+    llm._client = type("C", (), {"messages": FakeMsgs()})()
+    llm.model, llm.verify_model = "m", "v"
+    assert llm.json("s", "u", images=[{"media_type": "image/jpeg",
+                                       "data": "AAAA"}]) == {"ok": True}
+
+
 def test_extract_note_directive():
     from briefer.reminders import extract_note
     assert extract_note("https://x.com/a\nnote: call the CFO") == (
