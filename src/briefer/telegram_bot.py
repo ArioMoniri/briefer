@@ -419,6 +419,26 @@ class BrieferBot:
         await q.answer()
         if not self._allowed(chat_id):
             return
+        if data.startswith("cancel:"):
+            try:
+                job_id = int(data.split(":", 1)[1])
+            except ValueError:
+                return
+            prior = self.store.cancel_job(job_id)
+            if prior == "pending":
+                try:
+                    await q.edit_message_text("❌ Cancelled before it started.")
+                except Exception:  # noqa: BLE001
+                    pass
+            elif prior == "processing":
+                await q.answer("Already analysing — it'll finish shortly.",
+                               show_alert=True)
+            else:
+                try:
+                    await q.edit_message_reply_markup(reply_markup=None)
+                except Exception:  # noqa: BLE001
+                    pass
+            return
         if data.startswith("mode:"):
             kind = data.split(":", 1)[1]
             ctx.user_data["force_kind"] = kind
@@ -600,6 +620,11 @@ class BrieferBot:
         name = extract_assignee_name(text)
         if not name and self.store.person_by_name((text or "").strip()):
             name = (text or "").strip()
+        if name and name.strip().lower() in ("article", "articles", "event", "events"):
+            await self._reply(update, "To file an item on a specific sheet, send "
+                              "the *link* with `add to articles` / `add to events`. "
+                              "Re-routing an existing row isn't supported yet.")
+            return True
         if name:
             await self._assign_entry(update, eid, sheet, name, title)
             return True
@@ -723,6 +748,12 @@ class BrieferBot:
             return
 
         force_kind = ctx.user_data.pop("force_kind", None)
+        # Natural-language routing: "add these to articles" / "as an event".
+        if not force_kind:
+            from .reminders import extract_route
+            route_kind, text = extract_route(text)
+            if route_kind:
+                force_kind = route_kind
         # One message may contain several links/items — analyse each separately.
         for sub_text, sub_desc in self._split_submissions(text, descriptors):
             await self._enqueue(update, sub_text, sub_desc, force_kind)
@@ -842,8 +873,14 @@ class BrieferBot:
             note_txt = (f"📥 Queued — {ahead} item(s) ahead of you. "
                         "I'll analyse this and reply here.")
         note = await update.message.reply_text(note_txt)
-        self.store.enqueue_job(chat.id, submitter, text, descriptors,
-                               force_kind, note.message_id)
+        job_id = self.store.enqueue_job(chat.id, submitter, text, descriptors,
+                                        force_kind, note.message_id)
+        # A ✖ Cancel button on the status message (works while it's queued).
+        try:
+            await note.edit_reply_markup(reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton("✖ Cancel", callback_data=f"cancel:{job_id}")]]))
+        except Exception:  # noqa: BLE001
+            pass
         self._wake_worker()
 
     def _wake_worker(self) -> None:
@@ -854,13 +891,26 @@ class BrieferBot:
         assert self._wake is not None
         while True:
             try:
-                await self._wake.wait()
+                # Timeout fallback: even if a wake is ever missed, re-drain
+                # every 30s so queued jobs can never stall indefinitely.
+                try:
+                    await asyncio.wait_for(self._wake.wait(), timeout=30)
+                except asyncio.TimeoutError:
+                    pass
                 self._wake.clear()
                 while True:
                     job = self.store.claim_next_job()
                     if not job:
                         break
-                    await self._process_job(app, job)
+                    try:
+                        await self._process_job(app, job)
+                    except asyncio.CancelledError:
+                        self.store.finish_job(job["id"], "failed", "shutdown")
+                        raise
+                    except Exception as exc:  # noqa: BLE001 — one bad job must
+                        # never abort the drain or leave a job stuck 'processing'
+                        log.exception("job %s crashed", job["id"])
+                        self.store.finish_job(job["id"], "failed", str(exc))
             except asyncio.CancelledError:
                 raise
             except Exception:  # noqa: BLE001

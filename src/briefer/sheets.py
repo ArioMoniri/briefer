@@ -330,6 +330,14 @@ class SheetsClient:
         row = data + ["", entry_id, "", "", "", "", "", "", status, "", "", ""]
         rownum = self._first_empty_row(ws)
         if rownum:
+            # The grid caps at its current row count (a new sheet is 1000 rows).
+            # If we're about to write past the end, grow it first so the write
+            # doesn't 400 with "exceeds grid limits".
+            try:
+                if rownum > ws.row_count:
+                    ws.add_rows(rownum - ws.row_count + 200)
+            except Exception:  # noqa: BLE001
+                pass
             # Write into the first empty row so content fills from the top.
             last = _col_letter(len(row))
             try:

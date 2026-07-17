@@ -252,6 +252,28 @@ class Store:
             )
             self._conn.commit()
 
+    def cancel_job(self, job_id: int) -> str | None:
+        """Cancel a job. Only a *pending* job can be stopped (a processing one
+        is already mid-analysis). Returns the prior status so the caller can
+        explain: 'pending' (cancelled), 'processing' (too late), or None."""
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT status FROM jobs WHERE id=?", (job_id,)).fetchone()
+            if not row:
+                return None
+            if row[0] == "pending":
+                self._conn.execute(
+                    "UPDATE jobs SET status='cancelled', updated_at=? WHERE id=?",
+                    (time.time(), job_id))
+                self._conn.commit()
+            return row[0]
+
+    def job_status(self, job_id: int) -> str | None:
+        with self._lock:
+            r = self._conn.execute(
+                "SELECT status FROM jobs WHERE id=?", (job_id,)).fetchone()
+        return r[0] if r else None
+
     def pending_count(self) -> int:
         with self._lock:
             row = self._conn.execute(

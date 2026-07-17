@@ -80,6 +80,30 @@ def extract_assignee_name(text: str) -> Optional[str]:
     return name or None
 
 
+# "add these to articles", "put it under events", "as an article", "events sheet".
+_ROUTE_RE = re.compile(
+    r"(?:\b(?:add|put|file|pass|send|save|move)\b[^.\n]*?\b(?:to|under|into|as)\s+"
+    r"(?:an?\s+|the\s+)?(articles?|events?)\b)"
+    r"|(?:\bas\s+(?:an?\s+)?(articles?|events?)\b)"
+    r"|(?:\b(articles?|events?)\s+sheet\b)",
+    re.IGNORECASE,
+)
+
+
+def extract_route(text: str) -> tuple[Optional[str], str]:
+    """Pull a sheet-routing directive ('add these to articles', 'as an event')
+    out of the text. Returns ('article'|'event' or None, text_without_directive)."""
+    if not text:
+        return None, text or ""
+    m = _ROUTE_RE.search(text)
+    if not m:
+        return None, text
+    word = next((g for g in m.groups() if g), "")
+    kind = "event" if word.lower().startswith("event") else "article"
+    cleaned = (text[: m.start()] + " " + text[m.end():]).strip()
+    return kind, cleaned
+
+
 def parse_when(text: str, tz: str) -> Optional[datetime]:
     """Parse a natural-language or ISO time into a tz-aware future datetime."""
     if not text:

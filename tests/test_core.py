@@ -286,6 +286,28 @@ def test_llm_falls_back_to_text_only_on_image_500():
                                        "data": "AAAA"}]) == {"ok": True}
 
 
+def test_extract_route_and_cancel_job():
+    from briefer.reminders import extract_route
+    assert extract_route("https://x.com/a\nadd these to articles") == (
+        "article", "https://x.com/a")
+    assert extract_route("put it under events")[0] == "event"
+    assert extract_route("https://a.com as an article")[0] == "article"
+    assert extract_route("just a link")[0] is None
+
+    import tempfile
+    from briefer.storage import Store
+    s = Store(tempfile.mktemp())
+    jid = s.enqueue_job(7, "me", "hi", [], None, 1)
+    assert s.cancel_job(jid) == "pending"          # pending → cancelled
+    assert s.job_status(jid) == "cancelled"
+    assert s.claim_next_job() is None              # cancelled jobs aren't claimed
+    jid2 = s.enqueue_job(7, "me", "hi", [], None, 2)
+    s.claim_next_job()                             # now 'processing'
+    assert s.cancel_job(jid2) == "processing"      # can't cancel mid-analysis
+    assert s.job_status(jid2) == "processing"
+    s.close()
+
+
 def test_extract_note_directive():
     from briefer.reminders import extract_note
     assert extract_note("https://x.com/a\nnote: call the CFO") == (
